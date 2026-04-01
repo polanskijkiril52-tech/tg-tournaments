@@ -4,7 +4,6 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-# ---- Auth ----
 class AuthOut(BaseModel):
     access_token: str
 
@@ -32,11 +31,10 @@ class MeOut(UserOut):
     pass
 
 
-# ---- Tournaments ----
 class TournamentCreateIn(BaseModel):
     title: str = Field(min_length=3, max_length=200)
     game: str = Field(default="Dota 2", max_length=50)
-    format: str = Field(min_length=2, max_length=50)  # "1v1" / "5v5" etc.
+    format: str = Field(min_length=2, max_length=50)
     description: str | None = None
     max_teams: int | None = Field(default=None, ge=2, le=1024)
     start_at: datetime | None = None
@@ -58,7 +56,6 @@ class TournamentOut(BaseModel):
         from_attributes = True
 
 
-# ---- Teams ----
 class TeamCreateIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
 
@@ -89,7 +86,6 @@ class TournamentParticipantOut(BaseModel):
         from_attributes = True
 
 
-# ---- Matches / Bracket ----
 class MatchOut(BaseModel):
     id: int
     tournament_id: int
@@ -133,6 +129,13 @@ class MatchReportOut(BaseModel):
 
 
 class MatchWithReportsOut(MatchOut):
-    """Match details including submitted reports."""
-
     reports: list[MatchReportOut] = []
+
+
+class AdminResolveMatchIn(BaseModel):
+    winner_team_id: int
+
+
+class CheckInOut(BaseModel):
+    ok: bool
+    checked_in: bool

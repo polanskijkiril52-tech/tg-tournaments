@@ -101,7 +101,7 @@ class Match(Base):
     team2_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id"), nullable=True)
     winner_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teams.id"), nullable=True)
 
-    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/ready/finished
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending/ready/disputed/finished
 
     next_match_id: Mapped[Optional[int]] = mapped_column(ForeignKey("matches.id"), nullable=True)
     next_slot: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1 or 2

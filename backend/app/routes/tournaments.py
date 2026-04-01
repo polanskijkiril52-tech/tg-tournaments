@@ -4,13 +4,7 @@ from sqlalchemy.orm import Session
 from ..bracket import generate_single_elimination
 from ..deps import get_current_user, get_db, require_admin_strict
 from ..models import Match, Team, Tournament, TournamentTeam, User
-from ..schemas import (
-    BracketOut,
-    TournamentCreateIn,
-    TournamentJoinIn,
-    TournamentOut,
-    TournamentParticipantOut,
-)
+from ..schemas import BracketOut, CheckInOut, TournamentCreateIn, TournamentJoinIn, TournamentOut, TournamentParticipantOut
 
 router = APIRouter(prefix="/tournaments", tags=["tournaments"])
 
@@ -42,19 +36,11 @@ def get_bracket(tournament_id: int, db: Session = Depends(get_db)):
     for m in matches:
         rounds.setdefault(m.round, []).append(m)
 
-    return {
-        "tournament": t,
-        "participants": participants,
-        "rounds": rounds,
-    }
+    return {"tournament": t, "participants": participants, "rounds": rounds}
 
 
 @router.post("", response_model=TournamentOut)
-def create_tournament(
-    data: TournamentCreateIn,
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin_strict),
-):
+def create_tournament(data: TournamentCreateIn, db: Session = Depends(get_db), admin: User = Depends(require_admin_strict)):
     t = Tournament(
         title=data.title.strip(),
         game=data.game.strip() if data.game else "Dota 2",
@@ -72,12 +58,7 @@ def create_tournament(
 
 
 @router.post("/{tournament_id}/join", response_model=TournamentParticipantOut)
-def join_tournament(
-    tournament_id: int,
-    data: TournamentJoinIn,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
+def join_tournament(tournament_id: int, data: TournamentJoinIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     t = db.query(Tournament).filter(Tournament.id == tournament_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Tournament not found")
@@ -95,11 +76,7 @@ def join_tournament(
         if cnt >= t.max_teams:
             raise HTTPException(status_code=400, detail="Tournament is full")
 
-    existing = (
-        db.query(TournamentTeam)
-        .filter(TournamentTeam.tournament_id == t.id, TournamentTeam.team_id == team.id)
-        .first()
-    )
+    existing = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == t.id, TournamentTeam.team_id == team.id).first()
     if existing:
         return existing
 
@@ -110,15 +87,39 @@ def join_tournament(
     return tt
 
 
-@router.post("/{tournament_id}/start")
-def start_tournament(
-    tournament_id: int,
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin_strict),
-):
+@router.post("/{tournament_id}/check-in", response_model=CheckInOut)
+def toggle_check_in(tournament_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     t = db.query(Tournament).filter(Tournament.id == tournament_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Tournament not found")
+    if t.status not in {"open", "registration", "draft"}:
+        raise HTTPException(status_code=400, detail="Check-in is closed")
+
+    team = db.query(Team).filter(Team.captain_user_id == user.id).first()
+    if not team:
+        raise HTTPException(status_code=400, detail="Create a team first")
+
+    entry = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == t.id, TournamentTeam.team_id == team.id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Team is not registered in this tournament")
+
+    entry.checked_in = not bool(entry.checked_in)
+    db.commit()
+    return {"ok": True, "checked_in": entry.checked_in}
+
+
+@router.post("/{tournament_id}/start")
+def start_tournament(tournament_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin_strict)):
+    t = db.query(Tournament).filter(Tournament.id == tournament_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="Tournament not found")
+
+    checked_in_count = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == t.id, TournamentTeam.checked_in.is_(True)).count()
+    if checked_in_count > 0:
+        not_checked = db.query(TournamentTeam).filter(TournamentTeam.tournament_id == t.id, TournamentTeam.checked_in.is_(False)).all()
+        for item in not_checked:
+            db.delete(item)
+        db.flush()
 
     try:
         generate_single_elimination(db, t)
@@ -130,11 +131,7 @@ def start_tournament(
 
 
 @router.delete("/{tournament_id}")
-def delete_tournament(
-    tournament_id: int,
-    db: Session = Depends(get_db),
-    admin: User = Depends(require_admin_strict),
-):
+def delete_tournament(tournament_id: int, db: Session = Depends(get_db), admin: User = Depends(require_admin_strict)):
     t = db.query(Tournament).filter(Tournament.id == tournament_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="Tournament not found")

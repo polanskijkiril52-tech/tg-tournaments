@@ -72,6 +72,7 @@ async function apiPost(path, body, token) {
 function statusTone(status) {
   if (status === "finished") return "green";
   if (status === "ready") return "orange";
+  if (status === "disputed") return "red";
   if (status === "pending") return "neutral";
   if (status === "running") return "orange";
   if (status === "open" || status === "registration" || status === "draft") return "green";
@@ -85,6 +86,7 @@ function prettyStatus(status) {
     draft: "draft",
     running: "running",
     finished: "finished",
+    disputed: "спор",
     pending: "pending",
     ready: "ready",
   };
@@ -142,6 +144,7 @@ export default function App() {
   const [score2, setScore2] = useState(0);
   const [proofUrl, setProofUrl] = useState("");
   const [matchMsg, setMatchMsg] = useState("");
+  const [checkInMsg, setCheckInMsg] = useState("");
 
   const styles = useMemo(() => {
     const bg = theme.bg_color || "#0b0f19";
@@ -411,6 +414,11 @@ export default function App() {
     return (b.participants || []).some((p) => p.team?.id === myTeam.id);
   }
 
+  function myParticipantEntry(b) {
+    if (!b || !myTeam) return null;
+    return (b.participants || []).find((p) => p.team?.id === myTeam.id) || null;
+  }
+
   async function doJoinTournament() {
     if (!selectedTournamentId || !myTeam) return;
     setAuthMsg("");
@@ -422,6 +430,22 @@ export default function App() {
       setAuthMsg("Команда зарегистрирована ✅");
     } catch (err) {
       setAuthMsg(`Не удалось зарегистрироваться: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function doToggleCheckIn() {
+    if (!selectedTournamentId) return;
+    setCheckInMsg("");
+    setLoading(true);
+    try {
+      const res = await apiPost(`/tournaments/${selectedTournamentId}/check-in`, {}, token);
+      const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
+      setBracket(b);
+      setCheckInMsg(res.checked_in ? "Чек-ин подтверждён ✅" : "Чек-ин снят");
+    } catch (err) {
+      setCheckInMsg(`Ошибка check-in: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -450,6 +474,28 @@ export default function App() {
     return all.find((m) => m.team1?.id === myTeam.id || m.team2?.id === myTeam.id) || null;
   }
 
+  async function doAdminResolve(winnerTeamId) {
+    if (!match?.id) return;
+    setMatchMsg("");
+    setLoading(true);
+    try {
+      const resolved = await apiPost(`/matches/${match.id}/resolve`, { winner_team_id: winnerTeamId }, token);
+      setMatch(resolved);
+      if (selectedTournamentId) {
+        try {
+          const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
+          setBracket(b);
+        } catch (_) {}
+      }
+      await refreshNextMatch();
+      setMatchMsg("Матч подтверждён админом ✅");
+    } catch (err) {
+      setMatchMsg(`Ошибка: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function doReportMatch(e) {
     e?.preventDefault?.();
     if (!match?.id) return;
@@ -476,7 +522,7 @@ export default function App() {
         }
       }
       await refreshNextMatch();
-      setMatchMsg("Результат отправлен ✅\nМатч завершится, когда соперник введёт такой же счёт.");
+      setMatchMsg("Результат отправлен ✅\nЕсли соперник пришлёт другой счёт, матч уйдёт в спор и его подтвердит админ.");
     } catch (err) {
       setMatchMsg(`Ошибка: ${err.message}`);
     } finally {
@@ -667,6 +713,8 @@ export default function App() {
                         <Pill tone={statusTone(bracket.tournament.status)}>{prettyStatus(bracket.tournament.status)}</Pill>
                         <span className="dot" />
                         <span className="muted">участников: {bracket.participants?.length || 0}</span>
+                        <span className="dot" />
+                        <span className="muted">check-in: {(bracket.participants || []).filter((p) => p.checked_in).length}</span>
                         {myTeam ? (
                           <>
                             <span className="dot" />
@@ -678,6 +726,12 @@ export default function App() {
                     <div className="stack" style={{ gap: 8, width: 140 }}>
                       {token && myTeam && !isTeamInTournament(bracket) && (bracket.tournament.status === "open" || bracket.tournament.status === "registration" || bracket.tournament.status === "draft") ? (
                         <Button full variant="primary" onClick={doJoinTournament} disabled={loading}>Войти</Button>
+                      ) : null}
+
+                      {token && myTeam && isTeamInTournament(bracket) && (bracket.tournament.status === "open" || bracket.tournament.status === "registration" || bracket.tournament.status === "draft") ? (
+                        <Button full variant={myParticipantEntry(bracket)?.checked_in ? "secondary" : "primary"} onClick={doToggleCheckIn} disabled={loading}>
+                          {myParticipantEntry(bracket)?.checked_in ? "Снять check-in" : "Check-in"}
+                        </Button>
                       ) : null}
 
                       {isAdmin && (bracket.tournament.status === "open" || bracket.tournament.status === "registration" || bracket.tournament.status === "draft") ? (
@@ -692,6 +746,8 @@ export default function App() {
                       ) : null}
                     </div>
                   </div>
+
+                  {checkInMsg ? <div className="msg" style={{ marginTop: 10 }}>{checkInMsg}</div> : null}
 
                   {token && !myTeam ? (
                     <div className="msg" style={{ marginTop: 10 }}>
@@ -713,7 +769,7 @@ export default function App() {
                     ) : (
                       bracket.participants.map((p) => (
                         <div key={p.id} className="listItem">
-                          <span className="muted">•</span> <b>{p.team?.name}</b>
+                          <span className="muted">•</span> <b>{p.team?.name}</b> {p.checked_in ? <Pill tone="green">check-in</Pill> : <Pill tone="neutral">нет check-in</Pill>}
                         </div>
                       ))
                     )}
@@ -923,6 +979,16 @@ export default function App() {
                         {matchMsg ? <div className="msg">{matchMsg}</div> : null}
                       </form>
                     )}
+
+                    {isAdmin && !match.winner && (match.team1 || match.team2) ? (
+                      <div className="stack" style={{ marginTop: 12 }}>
+                        <div className="cardHint">Админ-подтверждение результата</div>
+                        <div className="row">
+                          {match.team1 ? <Button variant="secondary" onClick={() => doAdminResolve(match.team1.id)}>Победа {match.team1.name}</Button> : null}
+                          {match.team2 ? <Button variant="secondary" onClick={() => doAdminResolve(match.team2.id)}>Победа {match.team2.name}</Button> : null}
+                        </div>
+                      </div>
+                    ) : null}
                   </Card>
                 ) : (
                   <Card>
@@ -1349,6 +1415,7 @@ const css = `
 .pill--orange{ background: rgba(255, 159, 67, .18); }
 .pill--blue{ background: rgba(52, 152, 219, .18); }
 .pill--purple{ background: rgba(155, 89, 182, .18); }
+.pill--red{ background: rgba(231, 76, 60, .18); }
 
 .btn{
   border: 1px solid var(--border);
