@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-dotenv
+sqlalchemy
+psycopg2-binary
+PyJWT
+pydantic-settings
+passlib[bcrypt]==1.7.4

@@ -1,0 +1,5 @@
+backend/.env
+webapp/.env.local
+backend/.venv/
+**/__pycache__/
+webapp/node_modules/
