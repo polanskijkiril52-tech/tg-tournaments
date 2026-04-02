@@ -477,18 +477,22 @@ export default function App() {
 
   async function doResolveMatch(winnerTeamId) {
     if (!match?.id || !winnerTeamId) return;
+
     setMatchMsg("");
     setLoading(true);
     try {
       await apiPost(`/matches/${match.id}/resolve`, { winner_team_id: winnerTeamId }, token);
+
       const refreshed = await apiGet(`/matches/${match.id}`, token);
       setMatch(refreshed);
+
       if (selectedTournamentId) {
         try {
           const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
           setBracket(b);
         } catch (_) {}
       }
+
       await refreshNextMatch();
       setMatchMsg("Матч вручную завершён ✅");
     } catch (err) {
@@ -995,14 +999,24 @@ export default function App() {
                   <Card>
                     <div className="cardTitle">Resolve спора</div>
                     <div className="cardHint">Админ может вручную выбрать победителя.</div>
+
                     <div className="row" style={{ marginTop: 10 }}>
                       {match.team1 ? (
-                        <Button variant="primary" onClick={() => doResolveMatch(match.team1.id)} disabled={loading}>
+                        <Button
+                          variant="primary"
+                          onClick={() => doResolveMatch(match.team1.id)}
+                          disabled={loading}
+                        >
                           Победитель: {match.team1.name}
                         </Button>
                       ) : null}
+
                       {match.team2 ? (
-                        <Button variant="secondary" onClick={() => doResolveMatch(match.team2.id)} disabled={loading}>
+                        <Button
+                          variant="secondary"
+                          onClick={() => doResolveMatch(match.team2.id)}
+                          disabled={loading}
+                        >
                           Победитель: {match.team2.name}
                         </Button>
                       ) : null}
