@@ -93,11 +93,17 @@ def get_telegram_user_id_optional(
 
 def require_admin_strict(
     user: User = Depends(get_current_user),
-    tg_id: int = Depends(get_telegram_user_id),
+    tg_id: int | None = Depends(get_telegram_user_id_optional),
 ) -> User:
-    """Strict admin: only Telegram user with ADMIN_TELEGRAM_ID."""
+    """Strict admin in Telegram, with optional local dev fallback."""
+    if settings.DEV_AUTH_ENABLED and tg_id is None and user.is_admin:
+        return user
+
     if settings.ADMIN_TELEGRAM_ID is None:
         raise HTTPException(status_code=500, detail="Server misconfigured: ADMIN_TELEGRAM_ID not set")
+
+    if tg_id is None:
+        raise HTTPException(status_code=401, detail="Open the app from Telegram or use dev admin login")
 
     if tg_id != int(settings.ADMIN_TELEGRAM_ID):
         raise HTTPException(status_code=403, detail="Admin only")

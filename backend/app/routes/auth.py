@@ -6,18 +6,23 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, Header
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
+from pydantic import BaseModel, Field
 
 from ..schemas import AuthOut, RegisterIn, LoginIn, MeOut
 from ..auth.jwt import create
 from ..config import settings
-from ..deps import get_db, get_current_user, get_telegram_user_id, get_telegram_user_id_optional
+from ..deps import get_db, get_current_user, get_telegram_user_id_optional
 from ..models import User
 from ..telegram_init import TelegramInitDataError, verify_and_parse_init_data
 
 router = APIRouter()
 
-# ✅ Без bcrypt (нет лимита 72 байта и меньше проблем на хостингах)
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+
+class DevLoginIn(BaseModel):
+    username: str = Field(default="testuser", min_length=2, max_length=64)
+    is_admin: bool = False
 
 
 @router.get("/me", response_model=MeOut)
@@ -25,19 +30,22 @@ def me(
     user: User = Depends(get_current_user),
     tg_id: int | None = Depends(get_telegram_user_id_optional),
 ):
-    # If initData is present, bind account to tg_id (one-time)
     if tg_id is not None:
         if user.telegram_id is None:
             user.telegram_id = tg_id
         elif user.telegram_id != tg_id:
             raise HTTPException(status_code=403, detail="This account is bound to another Telegram user")
 
-    is_admin = (
-        settings.ADMIN_TELEGRAM_ID is not None
-        and (tg_id == int(settings.ADMIN_TELEGRAM_ID) if tg_id is not None else user.telegram_id == int(settings.ADMIN_TELEGRAM_ID))
-    )
+    tg_admin = False
+    if settings.ADMIN_TELEGRAM_ID is not None:
+        admin_tg_id = int(settings.ADMIN_TELEGRAM_ID)
+        tg_admin = (tg_id == admin_tg_id) if tg_id is not None else (user.telegram_id == admin_tg_id)
 
-    return {"id": user.id, "username": user.username, "is_admin": bool(is_admin)}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "is_admin": bool(user.is_admin or tg_admin),
+    }
 
 
 @router.post("/auth/register", response_model=AuthOut)
@@ -82,11 +90,9 @@ def login(
     if not user or not pwd.verify(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # If this account is already bound to a Telegram user, require initData.
     if user.telegram_id is not None and tg_id is None:
         raise HTTPException(status_code=401, detail="Open the app from Telegram to login")
 
-    # Bind account to tg id if not set; otherwise protect against hijack
     if tg_id is not None:
         if user.telegram_id is None:
             user.telegram_id = tg_id
@@ -98,17 +104,42 @@ def login(
     return {"access_token": token}
 
 
+@router.post("/auth/dev-login", response_model=AuthOut)
+def dev_login(
+    data: DevLoginIn,
+    db: Session = Depends(get_db),
+):
+    if not settings.DEV_AUTH_ENABLED:
+        raise HTTPException(status_code=403, detail="Dev auth is disabled")
+
+    username = data.username.strip()
+    user = db.query(User).filter(User.username == username).first()
+    if not user:
+        random_pw = secrets.token_urlsafe(16)
+        user = User(
+            username=username,
+            password_hash=pwd.hash(random_pw),
+            telegram_id=None,
+            is_admin=bool(data.is_admin),
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    else:
+        user.is_admin = bool(data.is_admin)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    token = create(user.id, settings.JWT_SECRET, settings.ACCESS_TOKEN_EXPIRE_SECONDS)
+    return {"access_token": token}
+
+
 @router.post("/auth/telegram", response_model=AuthOut)
 def telegram_login(
     db: Session = Depends(get_db),
     x_init_data: str = Header(..., alias="X-Init-Data"),
 ):
-    """Login/signup via Telegram Mini App initData.
-
-    - validates signature
-    - finds user by telegram_id or creates a new one
-    - returns JWT access token
-    """
     if not settings.TELEGRAM_BOT_TOKEN:
         raise HTTPException(status_code=500, detail="Server misconfigured: TELEGRAM_BOT_TOKEN not set")
 
@@ -131,7 +162,6 @@ def telegram_login(
 
     user = db.query(User).filter(User.telegram_id == tg_id).first()
     if not user:
-        # Prefer Telegram username if it's present (not guaranteed)
         base_username = tg_username if tg_username else f"tg_{tg_id}"
         base_username = base_username[:64]
         username = base_username
@@ -141,7 +171,6 @@ def telegram_login(
             suffix = f"_{i}"
             username = (base_username[: (64 - len(suffix))] + suffix)[:64]
 
-        # We still need a password_hash for the existing username/password login
         random_pw = secrets.token_urlsafe(16)
         user = User(
             username=username,
@@ -154,7 +183,6 @@ def telegram_login(
         db.commit()
         db.refresh(user)
     else:
-        # keep some profile fields up to date
         changed = False
         if first_name and user.first_name != first_name:
             user.first_name = first_name

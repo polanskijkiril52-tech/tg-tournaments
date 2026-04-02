@@ -20,6 +20,9 @@ class Settings(BaseSettings):
     # Strict admin (only one person): Telegram user id of the admin
     ADMIN_TELEGRAM_ID: int | None = None
 
+    # Local browser auth for development only
+    DEV_AUTH_ENABLED: bool = False
+
     class Config:
         env_file = ".env"
 

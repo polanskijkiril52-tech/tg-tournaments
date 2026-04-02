@@ -4,9 +4,7 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true,
-    allowedHosts: [
-      'kirill-tg-frontend.loca.lt'
-    ]
-  }
+    port: 5173,
+    strictPort: true,
+  },
 })
