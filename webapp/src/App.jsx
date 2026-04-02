@@ -1,15 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 const tg = window.Telegram?.WebApp ?? null;
-
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 const cx = (...a) => a.filter(Boolean).join(" ");
 
 function useTelegramTheme() {
   const [theme, setTheme] = useState(() => tg?.themeParams || {});
   useEffect(() => {
     if (!tg) return;
-    tg?.ready?.();
-    tg?.expand?.();
+    tg.ready?.();
+    tg.expand?.();
     const handler = () => setTheme(tg.themeParams || {});
     tg.onEvent("themeChanged", handler);
     return () => tg.offEvent("themeChanged", handler);
@@ -20,25 +20,10 @@ function useTelegramTheme() {
 function Pill({ children, tone = "neutral" }) {
   return <span className={cx("pill", `pill--${tone}`)}>{children}</span>;
 }
-
-function Card({ children }) {
-  return <div className="card">{children}</div>;
+function Card({ children }) { return <div className="card">{children}</div>; }
+function Button({ children, variant = "primary", ...props }) {
+  return <button className={cx("btn", `btn--${variant}`)} {...props}>{children}</button>;
 }
-
-function Button({ children, onClick, variant = "primary", full, type = "button", disabled }) {
-  return (
-    <button
-      type={type}
-      className={cx("btn", `btn--${variant}`, full && "btn--full")}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      {children}
-    </button>
-  );
-}
-
-const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8000";
 
 function buildHeaders(token, json = false) {
   const h = {};
@@ -47,1342 +32,537 @@ function buildHeaders(token, json = false) {
   if (tg?.initData) h["X-Init-Data"] = tg.initData;
   return h;
 }
-
-async function apiGet(path, token) {
+async function api(path, method = "GET", body, token) {
   const res = await fetch(`${API_BASE}${path}`, {
-    method: "GET",
-    headers: buildHeaders(token),
+    method,
+    headers: buildHeaders(token, body !== undefined),
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
   return data;
 }
 
-async function apiPost(path, body, token) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: buildHeaders(token, true),
-    body: JSON.stringify(body ?? {}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
-  return data;
+function prettyStatus(s) {
+  return ({ open: "open", running: "running", finished: "finished", pending: "pending", ready: "ready", disputed: "disputed", registration: "registration", draft: "draft" })[s] || s;
 }
-
-function statusTone(status) {
-  if (status === "finished") return "green";
-  if (status === "ready") return "orange";
-  if (status === "pending") return "neutral";
-  if (status === "running") return "orange";
-  if (status === "open" || status === "registration" || status === "draft") return "green";
-  if (status === "disputed") return "orange";
+function statusTone(s) {
+  if (s === "open") return "green";
+  if (s === "running" || s === "ready") return "orange";
+  if (s === "finished") return "blue";
   return "neutral";
 }
+function groupLabel(g) { return ({ WB: "Upper", LB: "Lower", GF: "Grand Final" })[g] || g; }
+function bracketLabel(b) { return b === "double" ? "double elimination" : "single elimination"; }
 
-function prettyStatus(status) {
-  const map = {
-    open: "open",
-    registration: "registration",
-    draft: "draft",
-    running: "running",
-    finished: "finished",
-    pending: "pending",
-    ready: "ready",
-    disputed: "disputed",
-  };
-  return map[status] || status;
-}
-
-function roundTitle(round, roundsCount) {
-  if (!roundsCount) return `Раунд ${round}`;
-  if (round === roundsCount) return "Финал";
-  if (round === roundsCount - 1) return "Полуфинал";
-  if (round === roundsCount - 2) return "Четвертьфинал";
-  return `Раунд ${round}`;
+function BracketVisual({ bracket, myTeamId, onOpenMatch }) {
+  const matchList = Object.values(bracket?.rounds || {}).flat();
+  if (!matchList.length) return <div className="muted">Сетка появится после старта турнира.</div>;
+  const groups = ["WB", "LB", "GF"];
+  return (
+    <div className="stack" style={{ gap: 14 }}>
+      {groups.map((group) => {
+        const rounds = [...new Set(matchList.filter((m) => m.bracket_group === group).map((m) => m.round))].sort((a, b) => a - b);
+        if (!rounds.length) return null;
+        return (
+          <div key={group}>
+            <div className="sectionTitle">{groupLabel(group)}</div>
+            <div className="bracketScroller">
+              <div className="bracketCols">
+                {rounds.map((round) => {
+                  const items = matchList
+                    .filter((m) => m.bracket_group === group && m.round === round)
+                    .sort((a, b) => (a.position || 0) - (b.position || 0));
+                  return (
+                    <div className="bracketCol" key={`${group}-${round}`}>
+                      <div className="bracketColTitle">Раунд {round}</div>
+                      {items.map((m) => {
+                        const mine = myTeamId && (m.team1?.id === myTeamId || m.team2?.id === myTeamId);
+                        return (
+                          <button key={m.id} className={cx("bracketMatch", mine && "bracketMatch--mine")} onClick={() => onOpenMatch(m.id)}>
+                            <div className="bracketTeam">{m.team1?.name || "TBD"}{m.winner?.id === m.team1?.id ? " ✓" : ""}</div>
+                            <div className="bracketDivider" />
+                            <div className="bracketTeam">{m.team2?.name || "TBD"}{m.winner?.id === m.team2?.id ? " ✓" : ""}</div>
+                            <div className="bracketMeta">
+                              <span>{prettyStatus(m.status)}</span>
+                              {mine ? <span>ваш матч</span> : null}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export default function App() {
   const theme = useTelegramTheme();
-
   const [screen, setScreen] = useState("tournaments");
   const [selectedTournamentId, setSelectedTournamentId] = useState(null);
   const [selectedMatchId, setSelectedMatchId] = useState(null);
-
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
-  const [regUsername, setRegUsername] = useState("");
-  const [regPassword, setRegPassword] = useState("");
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [authMsg, setAuthMsg] = useState("");
-  const [devLoginName, setDevLoginName] = useState("testuser");
-
   const [loading, setLoading] = useState(false);
+  const [toast, setToast] = useState("");
 
   const [me, setMe] = useState(null);
-  const isAdmin = !!me?.is_admin;
-
+  const [myTeam, setMyTeam] = useState(null);
   const [tournaments, setTournaments] = useState([]);
   const [bracket, setBracket] = useState(null);
   const [match, setMatch] = useState(null);
   const [nextMatch, setNextMatch] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [adminOverview, setAdminOverview] = useState(null);
 
-  const [myTeam, setMyTeam] = useState(null);
+  const [regUsername, setRegUsername] = useState("");
+  const [regPassword, setRegPassword] = useState("");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [devLoginName, setDevLoginName] = useState("testuser");
+
   const [teamName, setTeamName] = useState("");
-  const [teamMsg, setTeamMsg] = useState("");
+  const [joinCode, setJoinCode] = useState("");
+
+  const [profileDisplayName, setProfileDisplayName] = useState("");
+  const [profileBio, setProfileBio] = useState("");
+  const [profileRole, setProfileRole] = useState("");
 
   const [tTitle, setTTitle] = useState("");
   const [tFormat, setTFormat] = useState("5v5");
   const [tMaxTeams, setTMaxTeams] = useState(8);
   const [tStartAt, setTStartAt] = useState("");
+  const [tBracketType, setTBracketType] = useState("single");
+  const [tRulesText, setTRulesText] = useState("");
 
   const [score1, setScore1] = useState(0);
   const [score2, setScore2] = useState(0);
   const [proofUrl, setProofUrl] = useState("");
-  const [matchMsg, setMatchMsg] = useState("");
 
-  const styles = useMemo(() => {
-    const bg = theme.bg_color || "#0b0f19";
-    const text = theme.text_color || "#ffffff";
-    const hint = theme.hint_color || "rgba(255,255,255,.65)";
-    const link = theme.link_color || "#4da3ff";
-    const button = theme.button_color || "#2ea6ff";
-    const buttonText = theme.button_text_color || "#ffffff";
-    const secondary = theme.secondary_bg_color || "rgba(255,255,255,.06)";
-    return {
-      "--bg": bg,
-      "--text": text,
-      "--hint": hint,
-      "--link": link,
-      "--btn": button,
-      "--btnText": buttonText,
-      "--card": secondary,
-      "--border": "rgba(255,255,255,.10)",
-    };
-  }, [theme]);
+  const isAdmin = !!me?.is_admin;
+
+  const styles = useMemo(() => ({
+    "--bg": theme.bg_color || "#07111f",
+    "--text": theme.text_color || "#fff",
+    "--muted": theme.hint_color || "rgba(255,255,255,.68)",
+    "--panel": theme.secondary_bg_color || "rgba(255,255,255,.06)",
+    "--primary": theme.button_color || "#2ea6ff",
+    "--primaryText": theme.button_text_color || "#fff",
+  }), [theme]);
+
+  useEffect(() => { if (token) bootstrap(); else { refreshTournaments(); setMe(null); setMyTeam(null); } }, [token]);
+  useEffect(() => { if (me) { setProfileDisplayName(me.display_name || ""); setProfileBio(me.bio || ""); setProfileRole(me.preferred_role || ""); } }, [me]);
+
+  async function bootstrap() {
+    await Promise.allSettled([refreshMe(), refreshMyTeam(), refreshTournaments(), refreshNextMatch(), refreshHistory(), refreshAdminOverview()]);
+  }
+  async function refreshMe() { try { setMe(await api("/me", "GET", undefined, token)); } catch { setMe(null); } }
+  async function refreshMyTeam() { try { setMyTeam(await api("/teams/me", "GET", undefined, token)); } catch { setMyTeam(null); } }
+  async function refreshTournaments() { try { setTournaments(await api("/tournaments")); } catch {} }
+  async function refreshNextMatch() { try { setNextMatch(await api("/matches/next", "GET", undefined, token)); } catch { setNextMatch(null); } }
+  async function refreshHistory() { if (!token) return setHistory([]); try { setHistory(await api("/matches/history", "GET", undefined, token)); } catch { setHistory([]); } }
+  async function refreshAdminOverview() { if (!token) return setAdminOverview(null); try { setAdminOverview(await api("/admin/overview", "GET", undefined, token)); } catch { setAdminOverview(null); } }
 
   async function telegramAutoLogin() {
-    if (!tg?.initData) return;
-    if (token) return;
-    setAuthMsg("");
-    setLoading(true);
+    setLoading(true); setToast("");
     try {
-      const data = await apiPost("/auth/telegram", {}, null);
+      const data = await api("/auth/telegram", "POST", {}, token);
       localStorage.setItem("token", data.access_token);
       setToken(data.access_token);
-      setAuthMsg("Вход через Telegram выполнен ✅");
-    } catch (e) {
-      setAuthMsg(`Не удалось войти через Telegram: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
+      setToast("Вход выполнен");
+    } catch (e) { setToast(String(e.message || e)); }
+    finally { setLoading(false); }
   }
-
-  useEffect(() => {
-    telegramAutoLogin();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const list = await apiGet("/tournaments", token);
-        if (alive) setTournaments(list);
-      } catch (_) {}
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [token]);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!token) {
-        setMe(null);
-        return;
-      }
-      try {
-        const profile = await apiGet("/me", token);
-        if (alive) setMe(profile);
-      } catch (_) {
-        localStorage.removeItem("token");
-        if (alive) {
-          setToken("");
-          setMe(null);
-        }
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [token]);
-
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!token) {
-        setMyTeam(null);
-        return;
-      }
-      try {
-        const team = await apiGet("/teams/me", token);
-        if (alive) setMyTeam(team);
-      } catch (_) {
-        if (alive) setMyTeam(null);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [token]);
-
-  async function refreshNextMatch() {
-    if (!token) return;
+  async function doDevLogin(name, is_admin = false) {
+    setLoading(true); setToast("");
     try {
-      const m = await apiGet("/matches/next", token);
-      setNextMatch(m);
-    } catch (_) {
-      setNextMatch(null);
-    }
+      const data = await api("/auth/dev-login", "POST", { username: name, is_admin }, token);
+      localStorage.setItem("token", data.access_token); setToken(data.access_token); setToast("Тестовый вход выполнен ✅");
+    } catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
-
-  useEffect(() => {
-    refreshNextMatch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, myTeam?.id]);
-
-  async function refreshTournaments() {
-    const list = await apiGet("/tournaments", token);
-    setTournaments(list);
-  }
-
   async function doRegister(e) {
-    e?.preventDefault?.();
-    setAuthMsg("");
-    setLoading(true);
-    try {
-      const data = await apiPost("/auth/register", { username: regUsername, password: regPassword });
-      localStorage.setItem("token", data.access_token);
-      setToken(data.access_token);
-      setAuthMsg("Регистрация успешна ✅");
-      setRegPassword("");
-    } catch (err) {
-      setAuthMsg(`Ошибка регистрации: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+    e.preventDefault(); setLoading(true); setToast("");
+    try { const d = await api("/auth/register", "POST", { username: regUsername, password: regPassword }, token); localStorage.setItem("token", d.access_token); setToken(d.access_token); }
+    catch (e2) { setToast(String(e2.message || e2)); } finally { setLoading(false); }
   }
-
   async function doLogin(e) {
-    e?.preventDefault?.();
-    setAuthMsg("");
-    setLoading(true);
-    try {
-      const data = await apiPost("/auth/login", { username: loginUsername, password: loginPassword });
-      localStorage.setItem("token", data.access_token);
-      setToken(data.access_token);
-      setAuthMsg("Вход выполнен ✅");
-      setLoginPassword("");
-    } catch (err) {
-      setAuthMsg(`Ошибка входа: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+    e.preventDefault(); setLoading(true); setToast("");
+    try { const d = await api("/auth/login", "POST", { username: loginUsername, password: loginPassword }, token); localStorage.setItem("token", d.access_token); setToken(d.access_token); }
+    catch (e2) { setToast(String(e2.message || e2)); } finally { setLoading(false); }
   }
+  function logout() { localStorage.removeItem("token"); setToken(""); setScreen("profile"); }
 
-  async function doDevLogin(username = "testuser", isAdminLogin = false) {
-    setAuthMsg("");
-    setLoading(true);
-    try {
-      const actualUsername = isAdminLogin ? (username || "testadmin") : (username || "testuser");
-      const data = await apiPost("/auth/dev-login", { username: actualUsername, is_admin: isAdminLogin });
-      localStorage.setItem("token", data.access_token);
-      setToken(data.access_token);
-      setAuthMsg(isAdminLogin ? "Тестовый админ-вход выполнен ✅" : "Тестовый вход выполнен ✅");
-    } catch (err) {
-      setAuthMsg(`Dev login недоступен: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+  async function openTournament(id) {
+    setSelectedTournamentId(id); setScreen("tournament"); setLoading(true); setToast("");
+    try { setBracket(await api(`/tournaments/${id}/bracket`, "GET", undefined, token)); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
-
-  function logout() {
-    localStorage.removeItem("token");
-    setToken("");
-    setMe(null);
-    setMyTeam(null);
-    setBracket(null);
-    setMatch(null);
-    setNextMatch(null);
-    setAuthMsg("Вы вышли из аккаунта");
-    setScreen("me");
-  }
-
-  function goTournaments() {
-    setScreen("tournaments");
-    setSelectedTournamentId(null);
-    setSelectedMatchId(null);
-    setBracket(null);
-    setMatch(null);
-    setMatchMsg("");
-  }
-
-  async function openTournament(tournamentId) {
-    setSelectedTournamentId(tournamentId);
-    setSelectedMatchId(null);
-    setMatch(null);
-    setMatchMsg("");
-    setScreen("tournament");
-    try {
-      const b = await apiGet(`/tournaments/${tournamentId}/bracket`, token);
-      setBracket(b);
-    } catch (e) {
-      setBracket(null);
-      setAuthMsg(`Не удалось загрузить турнир: ${e.message}`);
-    }
-  }
-
-  async function openMatch(matchId) {
-    setSelectedMatchId(matchId);
-    setScreen("match");
-    setMatchMsg("");
-    try {
-      const m = await apiGet(`/matches/${matchId}`, token);
-      setMatch(m);
-      setScore1(0);
-      setScore2(0);
-      setProofUrl("");
-    } catch (e) {
-      setMatch(null);
-      setMatchMsg(`Не удалось загрузить матч: ${e.message}`);
-    }
-  }
-
-  function goBack() {
-    if (screen === "match") {
-      setScreen("tournament");
-      setSelectedMatchId(null);
-      setMatch(null);
-      setMatchMsg("");
-      return;
-    }
-    if (screen === "tournament" || screen === "create") {
-      goTournaments();
-    }
-  }
-
-  async function doCreateTournament(e) {
-    e?.preventDefault?.();
-    setAuthMsg("");
-    setLoading(true);
-    try {
-      const payload = {
-        title: tTitle,
-        format: tFormat,
-        max_teams: Number(tMaxTeams) || null,
-        start_at: tStartAt ? new Date(tStartAt).toISOString() : null,
-      };
-      await apiPost("/tournaments", payload, token);
-      setAuthMsg("Турнир создан ✅");
-      setTTitle("");
-      await refreshTournaments();
-      goTournaments();
-    } catch (err) {
-      setAuthMsg(`Ошибка создания турнира: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+  async function openMatch(id) {
+    setSelectedMatchId(id); setScreen("match"); setLoading(true); setToast("");
+    try { setMatch(await api(`/matches/${id}`, "GET", undefined, token)); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
 
   async function doCreateTeam(e) {
-    e?.preventDefault?.();
-    setTeamMsg("");
-    setLoading(true);
+    e.preventDefault(); setLoading(true); setToast("");
+    try { setMyTeam(await api("/teams", "POST", { name: teamName }, token)); setTeamName(""); setToast("Команда создана"); }
+    catch (e2) { setToast(String(e2.message || e2)); }
+    finally { setLoading(false); }
+  }
+  async function doJoinByCode(e) {
+    e.preventDefault(); setLoading(true); setToast("");
+    try { setMyTeam(await api("/teams/join-by-code", "POST", { invite_code: joinCode }, token)); setJoinCode(""); setToast("Вы вступили в команду"); }
+    catch (e2) { setToast(String(e2.message || e2)); } finally { setLoading(false); }
+  }
+  async function doLeaveTeam() {
+    if (!window.confirm("Выйти из команды?")) return;
+    setLoading(true); setToast("");
+    try { await api("/teams/leave", "POST", {}, token); setMyTeam(null); setToast("Вы вышли из команды"); await refreshTournaments(); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
+  }
+  async function promoteMember(userId) {
+    setLoading(true); setToast("");
+    try { const data = await api(`/teams/${myTeam.id}/members/${userId}/role`, "POST", { role: "captain" }, token); setMyTeam(data); setToast("Капитан обновлён"); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
+  }
+  async function kickMember(userId) {
+    if (!window.confirm("Удалить игрока из состава?")) return;
+    setLoading(true); setToast("");
+    try { await api(`/teams/${myTeam.id}/members/${userId}`, "DELETE", undefined, token); await refreshMyTeam(); setToast("Игрок удалён"); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
+  }
+
+  async function saveProfile(e) {
+    e.preventDefault(); setLoading(true); setToast("");
+    try { const data = await api("/me/profile", "PUT", { display_name: profileDisplayName, bio: profileBio, preferred_role: profileRole }, token); setMe(data); setToast("Профиль сохранён"); }
+    catch (e2) { setToast(String(e2.message || e2)); } finally { setLoading(false); }
+  }
+
+  async function doCreateTournament(e) {
+    e.preventDefault(); setLoading(true); setToast("");
     try {
-      const team = await apiPost("/teams", { name: teamName }, token);
-      setMyTeam(team);
-      setTeamName("");
-      setTeamMsg("Команда создана ✅");
-      setScreen("tournaments");
-      await refreshNextMatch();
-    } catch (err) {
-      setTeamMsg(`Ошибка: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+      await api("/tournaments", "POST", {
+        title: tTitle,
+        game: "Dota 2",
+        format: tFormat,
+        max_teams: tMaxTeams ? Number(tMaxTeams) : null,
+        start_at: tStartAt || null,
+        bracket_type: tBracketType,
+        rules_text: tRulesText || null,
+      }, token);
+      setTTitle(""); setTRulesText(""); setTStartAt(""); await refreshTournaments(); await refreshAdminOverview(); setToast("Турнир создан"); setScreen("tournaments");
+    } catch (e2) { setToast(String(e2.message || e2)); } finally { setLoading(false); }
   }
-
-  function isTeamInTournament(b) {
-    if (!b || !myTeam) return false;
-    return (b.participants || []).some((p) => p.team?.id === myTeam.id);
-  }
-
-  function myParticipantRecord(b) {
-    if (!b || !myTeam) return null;
-    return (b.participants || []).find((p) => p.team?.id === myTeam.id) || null;
-  }
-
-  const myParticipant = myParticipantRecord(bracket);
-  const myCheckedIn = !!(myParticipant?.checked_in || myParticipant?.is_checked_in);
-
   async function doJoinTournament() {
-    if (!selectedTournamentId || !myTeam) return;
-    setAuthMsg("");
-    setLoading(true);
-    try {
-      await apiPost(`/tournaments/${selectedTournamentId}/join`, { team_id: myTeam.id }, token);
-      const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
-      setBracket(b);
-      setAuthMsg("Команда зарегистрирована ✅");
-    } catch (err) {
-      setAuthMsg(`Не удалось зарегистрироваться: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true); setToast("");
+    try { await api(`/tournaments/${selectedTournamentId}/join`, "POST", { team_id: myTeam.id }, token); await openTournament(selectedTournamentId); setToast("Команда зарегистрирована"); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
-
   async function doCheckIn() {
-    if (!selectedTournamentId) return;
-    setAuthMsg("");
-    setLoading(true);
-    try {
-      await apiPost(`/tournaments/${selectedTournamentId}/check-in`, {}, token);
-      const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
-      setBracket(b);
-      setAuthMsg("Check-in переключён ✅");
-    } catch (err) {
-      setAuthMsg(`Не удалось сделать check-in: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true); setToast("");
+    try { await api(`/tournaments/${selectedTournamentId}/check-in`, "POST", {}, token); await openTournament(selectedTournamentId); setToast("Check-in обновлён"); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
-
   async function doStartTournament() {
-    if (!selectedTournamentId) return;
-    setAuthMsg("");
-    setLoading(true);
-    try {
-      await apiPost(`/tournaments/${selectedTournamentId}/start`, {}, token);
-      const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
-      setBracket(b);
-      await refreshTournaments();
-      setAuthMsg("Турнир запущен ✅");
-    } catch (err) {
-      setAuthMsg(`Не удалось запустить: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true); setToast("");
+    try { await api(`/tournaments/${selectedTournamentId}/start`, "POST", {}, token); await openTournament(selectedTournamentId); await refreshTournaments(); await refreshNextMatch(); setToast("Турнир стартовал"); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
-
-  async function doResolveMatch(winnerTeamId) {
-    if (!match?.id || !winnerTeamId) return;
-
-    setMatchMsg("");
-    setLoading(true);
-    try {
-      await apiPost(`/matches/${match.id}/resolve`, { winner_team_id: winnerTeamId }, token);
-
-      const refreshed = await apiGet(`/matches/${match.id}`, token);
-      setMatch(refreshed);
-
-      if (selectedTournamentId) {
-        try {
-          const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
-          setBracket(b);
-        } catch (_) {}
-      }
-
-      await refreshNextMatch();
-      setMatchMsg("Матч вручную завершён ✅");
-    } catch (err) {
-      setMatchMsg(`Ошибка resolve: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function myMatchInBracket(b) {
-    if (!b || !myTeam) return null;
-    const all = Object.values(b.rounds || {}).flat();
-    return all.find((m) => m.team1?.id === myTeam.id || m.team2?.id === myTeam.id) || null;
+  async function doDeleteTournament(id, fromDetail = false) {
+    if (!window.confirm("Удалить турнир?")) return;
+    setLoading(true); setToast("");
+    try { await api(`/tournaments/${id}`, "DELETE", undefined, token); await refreshTournaments(); await refreshAdminOverview(); setToast("Турнир удалён"); if (fromDetail) { setBracket(null); setScreen("tournaments"); } }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
 
   async function doReportMatch(e) {
-    e?.preventDefault?.();
-    if (!match?.id) return;
-
-    setMatchMsg("");
-    setLoading(true);
+    e.preventDefault(); setLoading(true); setToast("");
     try {
-      await apiPost(
-        `/matches/${match.id}/report`,
-        {
-          score_team1: Number(score1) || 0,
-          score_team2: Number(score2) || 0,
-          proof_url: proofUrl || null,
-        },
-        token
-      );
-
-      const refreshed = await apiGet(`/matches/${match.id}`, token);
-      setMatch(refreshed);
-
-      if (selectedTournamentId) {
-        try {
-          const b = await apiGet(`/tournaments/${selectedTournamentId}/bracket`, token);
-          setBracket(b);
-        } catch (_) {}
-      }
-      await refreshNextMatch();
-
-      if (refreshed?.status === "disputed") {
-        setMatchMsg("Репорт отправлен ⚠️ Матч перешёл в спор.");
-      } else {
-        setMatchMsg("Результат отправлен ✅");
-      }
-    } catch (err) {
-      setMatchMsg(`Ошибка: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+      await api(`/matches/${selectedMatchId}/report`, "POST", { score_team1: Number(score1), score_team2: Number(score2), proof_url: proofUrl || null }, token);
+      await openMatch(selectedMatchId); await refreshNextMatch(); await refreshHistory();
+      if (selectedTournamentId) await openTournament(selectedTournamentId);
+      setToast("Результат отправлен");
+    } catch (e2) { setToast(String(e2.message || e2)); } finally { setLoading(false); }
+  }
+  async function doResolveMatch(teamId) {
+    setLoading(true); setToast("");
+    try { await api(`/matches/${selectedMatchId}/resolve`, "POST", { winner_team_id: teamId }, token); await openMatch(selectedMatchId); await refreshNextMatch(); await refreshHistory(); if (selectedTournamentId) await openTournament(selectedTournamentId); setToast("Матч завершён админом"); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
+  }
+  async function doDeleteMatch() {
+    if (!window.confirm("Удалить матч?")) return;
+    setLoading(true); setToast("");
+    try { await api(`/matches/${selectedMatchId}`, "DELETE", undefined, token); setScreen("tournament"); if (selectedTournamentId) await openTournament(selectedTournamentId); setToast("Матч удалён"); }
+    catch (e) { setToast(String(e.message || e)); } finally { setLoading(false); }
   }
 
-  const headerTitle = (() => {
-    if (screen === "tournaments") return "Турниры";
-    if (screen === "tournament") return bracket?.tournament?.title || "Турнир";
-    if (screen === "match") return "Матч";
-    if (screen === "create") return "Создать турнир";
-    if (screen === "team") return "Моя команда";
-    if (screen === "me") return "Профиль";
-    return "";
-  })();
-
-  const showBack = screen === "tournament" || screen === "match" || screen === "create";
-
-  const bottomTab = (() => {
-    if (screen === "team") return "team";
-    if (screen === "me") return "me";
-    return "tournaments";
-  })();
-
-  const roundsCount = useMemo(() => {
-    const keys = Object.keys(bracket?.rounds || {});
-    if (!keys.length) return 0;
-    return Math.max(...keys.map((k) => Number(k) || 0));
-  }, [bracket]);
+  const myTeamInTournament = useMemo(() => bracket?.participants?.find((p) => p.team?.id === myTeam?.id), [bracket, myTeam]);
+  const myTeamId = myTeam?.id || null;
+  const bottomTab = screen === "tournament" || screen === "match" ? "tournaments" : screen;
 
   return (
     <div className="app" style={styles}>
       <header className="header">
-        <div className="headerLeft">
-          {showBack ? (
-            <button className="backBtn" onClick={goBack}>
-              ←
-            </button>
-          ) : null}
-          <div>
-            <div className="title">{headerTitle}</div>
-            <div className="subtitle">Dota 2 • Mini App</div>
+        <div>
+          <div className="title">
+            {screen === "tournaments" && "Турниры"}
+            {screen === "tournament" && (bracket?.tournament?.title || "Турнир")}
+            {screen === "match" && "Матч"}
+            {screen === "team" && "Моя команда"}
+            {screen === "profile" && "Профиль"}
+            {screen === "admin" && "Админ-панель"}
           </div>
+          <div className="subtitle">Dota 2 • Mini App</div>
         </div>
-        <div className="headerRight">
-          {isAdmin && screen === "tournaments" ? (
-            <Button variant="secondary" onClick={() => setScreen("create")}>
-              Создать
-            </Button>
-          ) : null}
-        </div>
+        {(screen === "tournament" || screen === "match") ? <Button variant="secondary" onClick={() => setScreen(screen === "match" ? "tournament" : "tournaments")}>Назад</Button> : null}
       </header>
 
-      {!API_BASE && (
-        <div className="warn">
-          ⚠️ Не задан API адрес. Укажите <b>VITE_API_BASE</b> в webapp/.env
-        </div>
-      )}
+      {toast ? <div className="msg">{toast}</div> : null}
 
-      {authMsg && <div className="msg">{authMsg}</div>}
-
-      <main className="content">
+      <main className="stack">
         {screen === "tournaments" && (
-          <div className="stack">
-            <Card>
-              <div className="row row--top">
-                <div className="grow">
-                  <div className="cardTitle">Быстрые действия</div>
-                  <div className="cardHint">
-                    {myTeam ? (
-                      <>
-                        <Pill tone="green">команда: {myTeam.name}</Pill>
-                        <span className="dot" />
-                        <span className="muted">можно регаться в турниры</span>
-                      </>
-                    ) : token ? (
-                      <>
-                        <Pill tone="orange">нет команды</Pill>
-                        <span className="dot" />
-                        <span className="muted">создай команду, чтобы участвовать</span>
-                      </>
-                    ) : (
-                      <>
-                        <Pill tone="orange">не авторизован</Pill>
-                        <span className="dot" />
-                        <span className="muted">войдите, чтобы создать команду</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                {!myTeam && token ? (
-                  <Button variant="primary" onClick={() => setScreen("team")}>
-                    Моя команда
-                  </Button>
-                ) : null}
-              </div>
-            </Card>
-
-            <Card>
-              <div className="row row--top">
-                <div className="grow">
-                  <div className="cardTitle">Мой следующий матч</div>
-                  <div className="cardHint">
-                    {nextMatch ? (
-                      <>
-                        <Pill tone={statusTone(nextMatch.status)}>{prettyStatus(nextMatch.status)}</Pill>
-                        <span className="dot" />
-                        <span className="muted">
-                          {nextMatch.team1?.name || "TBD"} vs {nextMatch.team2?.name || "TBD"}
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <Pill tone="neutral">пока нет</Pill>
-                        <span className="dot" />
-                        <span className="muted">когда турнир запустят — тут появится матч</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <Button
-                  variant={nextMatch ? "primary" : "secondary"}
-                  onClick={() => {
-                    if (!nextMatch) return;
-                    setSelectedTournamentId(nextMatch.tournament_id);
-                    openTournament(nextMatch.tournament_id).then(() => openMatch(nextMatch.id));
-                  }}
-                  disabled={!nextMatch}
-                >
-                  Открыть
-                </Button>
-              </div>
-            </Card>
-
-            <div className="row" style={{ justifyContent: "space-between" }}>
-              <div className="cardTitle" style={{ margin: 0 }}>
-                Список турниров
-              </div>
-              <Button variant="secondary" onClick={refreshTournaments} disabled={loading}>
-                Обновить
-              </Button>
-            </div>
-
-            {tournaments.length === 0 ? (
+          <>
+            {myTeam ? (
               <Card>
-                <div className="cardTitle">Пока нет турниров</div>
-                <div className="cardHint">Админ создаст турнир — он появится здесь.</div>
+                <div className="cardTitle">Быстрые действия</div>
+                <div className="cardHint"><Pill tone="green">команда: {myTeam.name}</Pill> <span className="dot" /> можно регаться в турниры</div>
               </Card>
             ) : null}
-
-            {tournaments.map((t) => (
-              <Card key={t.id}>
-                <div className="row row--top">
-                  <div className="grow">
-                    <div className="cardTitle">{t.title}</div>
-                    <div className="cardHint">
-                      <Pill tone={t.format === "1v1" ? "blue" : "purple"}>{t.format}</Pill>
-                      <span className="dot" />
-                      <Pill tone={statusTone(t.status)}>{prettyStatus(t.status)}</Pill>
-                      {t.max_teams ? (
-                        <>
-                          <span className="dot" />
-                          <span className="muted">макс. команд: {t.max_teams}</span>
-                        </>
-                      ) : null}
-                    </div>
+            {nextMatch ? (
+              <Card>
+                <div className="row between">
+                  <div>
+                    <div className="cardTitle">Мой следующий матч</div>
+                    <div className="cardHint"><Pill tone={statusTone(nextMatch.status)}>{prettyStatus(nextMatch.status)}</Pill> <span className="dot" /> {nextMatch.team1?.name} vs {nextMatch.team2?.name}</div>
                   </div>
-                  <Button variant="primary" onClick={() => openTournament(t.id)}>
-                    Открыть
-                  </Button>
+                  <Button onClick={() => { openTournament(nextMatch.tournament_id).then(() => openMatch(nextMatch.id)); }}>Открыть</Button>
                 </div>
               </Card>
-            ))}
-          </div>
-        )}
-
-        {screen === "tournament" && (
-          <div className="stack">
-            {!bracket ? (
-              <Card>
-                <div className="cardTitle">Загрузка…</div>
-                <div className="cardHint">Если долго грузит — проверь API / доступ к серверу.</div>
-              </Card>
-            ) : (
-              <>
-                <Card>
-                  <div className="row row--top">
-                    <div className="grow">
-                      <div className="cardTitle">Инфо</div>
-                      <div className="cardHint">
-                        <Pill tone={statusTone(bracket.tournament.status)}>{prettyStatus(bracket.tournament.status)}</Pill>
-                        <span className="dot" />
-                        <span className="muted">участников: {bracket.participants?.length || 0}</span>
-                        {myTeam ? (
-                          <>
-                            <span className="dot" />
-                            <span className="muted">ваша команда: {myTeam.name}</span>
-                          </>
-                        ) : null}
-                        {isTeamInTournament(bracket) ? (
-                          <>
-                            <span className="dot" />
-                            <Pill tone={myCheckedIn ? "green" : "orange"}>
-                              {myCheckedIn ? "checked-in" : "not checked-in"}
-                            </Pill>
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="stack" style={{ gap: 8, width: 140 }}>
-                      {token &&
-                      myTeam &&
-                      !isTeamInTournament(bracket) &&
-                      (bracket.tournament.status === "open" ||
-                        bracket.tournament.status === "registration" ||
-                        bracket.tournament.status === "draft") ? (
-                        <Button full variant="primary" onClick={doJoinTournament} disabled={loading}>
-                          Войти
-                        </Button>
-                      ) : null}
-
-                      {token &&
-                      myTeam &&
-                      isTeamInTournament(bracket) &&
-                      (bracket.tournament.status === "open" ||
-                        bracket.tournament.status === "registration" ||
-                        bracket.tournament.status === "draft") ? (
-                        <Button full variant="secondary" onClick={doCheckIn} disabled={loading}>
-                          {myCheckedIn ? "Uncheck" : "Check-in"}
-                        </Button>
-                      ) : null}
-
-                      {isAdmin &&
-                      (bracket.tournament.status === "open" ||
-                        bracket.tournament.status === "registration" ||
-                        bracket.tournament.status === "draft") ? (
-                        <Button
-                          full
-                          variant="secondary"
-                          onClick={doStartTournament}
-                          disabled={loading || (bracket.participants?.length || 0) < 2}
-                        >
-                          Старт
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  {token && !myTeam ? (
-                    <div className="msg" style={{ marginTop: 10 }}>
-                      Чтобы участвовать — создай команду.
-                      <div style={{ marginTop: 10 }}>
-                        <Button variant="primary" onClick={() => setScreen("team")}>
-                          Создать команду
-                        </Button>
-                      </div>
-                    </div>
-                  ) : null}
-                </Card>
-
-                <Card>
-                  <div className="cardTitle">Участники</div>
-                  <div className="cardHint">Кто уже зарегистрировался.</div>
-                  <div className="list" style={{ marginTop: 10 }}>
-                    {(bracket.participants || []).length === 0 ? (
-                      <div className="muted">Пока никого нет.</div>
-                    ) : (
-                      bracket.participants.map((p) => (
-                        <div key={p.id} className="listItem">
-                          <div className="row" style={{ justifyContent: "space-between" }}>
-                            <span>
-                              <span className="muted">•</span> <b>{p.team?.name}</b>
-                            </span>
-                            {"checked_in" in p || "is_checked_in" in p ? (
-                              <Pill tone={p.checked_in || p.is_checked_in ? "green" : "orange"}>
-                                {p.checked_in || p.is_checked_in ? "checked-in" : "not checked-in"}
-                              </Pill>
-                            ) : null}
-                          </div>
+            ) : null}
+            <Card>
+              <div className="row between"><div className="cardTitle">Список турниров</div><Button variant="secondary" onClick={refreshTournaments}>Обновить</Button></div>
+              <div className="stack" style={{ marginTop: 10 }}>
+                {tournaments.map((t) => (
+                  <div className="listItem" key={t.id}>
+                    <div className="row between top">
+                      <div>
+                        <div className="cardTitle" style={{ fontSize: 22 }}>{t.title}</div>
+                        <div className="cardHint">
+                          <Pill tone="purple">{t.format}</Pill>
+                          <span className="dot" />
+                          <Pill tone={statusTone(t.status)}>{prettyStatus(t.status)}</Pill>
+                          <span className="dot" />
+                          <Pill tone="blue">{bracketLabel(t.bracket_type)}</Pill>
+                          {t.max_teams ? <><span className="dot" /><span className="muted">макс. команд: {t.max_teams}</span></> : null}
                         </div>
-                      ))
-                    )}
-                  </div>
-                </Card>
-
-                <Card>
-                  <div className="row" style={{ justifyContent: "space-between" }}>
-                    <div>
-                      <div className="cardTitle">Сетка</div>
-                      <div className="cardHint">Карточки по раундам.</div>
-                    </div>
-                    {myTeam ? (
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          const mm = myMatchInBracket(bracket);
-                          if (mm) openMatch(mm.id);
-                          else setAuthMsg("Ваших матчей в этом турнире пока нет");
-                        }}
-                      >
-                        Мой матч
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  {Object.keys(bracket.rounds || {}).length === 0 ? (
-                    <div className="muted" style={{ marginTop: 10 }}>
-                      Сетка появится после старта турнира.
-                    </div>
-                  ) : (
-                    <div className="stack" style={{ marginTop: 12 }}>
-                      {Object.keys(bracket.rounds || {})
-                        .map((k) => Number(k))
-                        .sort((a, b) => a - b)
-                        .map((r) => (
-                          <div key={r} className="roundBlock">
-                            <div className="roundTitle">{roundTitle(r, roundsCount)}</div>
-                            <div className="stack" style={{ gap: 10, marginTop: 10 }}>
-                              {bracket.rounds[r].map((m) => {
-                                const t1 = m.team1?.name || "TBD";
-                                const t2 = m.team2?.name || "TBD";
-                                const isMine = myTeam && (m.team1?.id === myTeam.id || m.team2?.id === myTeam.id);
-                                return (
-                                  <div
-                                    key={m.id}
-                                    className={cx("matchCard", isMine && "matchCard--mine")}
-                                    onClick={() => openMatch(m.id)}
-                                    role="button"
-                                    tabIndex={0}
-                                  >
-                                    <div className="row row--top">
-                                      <div className="grow">
-                                        <div className="matchTitle">
-                                          {t1} <span className="muted">vs</span> {t2}
-                                        </div>
-                                        <div className="cardHint" style={{ marginTop: 6 }}>
-                                          <Pill tone={statusTone(m.status)}>{prettyStatus(m.status)}</Pill>
-                                          {isMine ? (
-                                            <>
-                                              <span className="dot" />
-                                              <Pill tone="blue">ваш матч</Pill>
-                                            </>
-                                          ) : null}
-                                          {m.winner ? (
-                                            <>
-                                              <span className="dot" />
-                                              <span className="muted">
-                                                победитель: <b>{m.winner.name}</b>
-                                              </span>
-                                            </>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                      <Button
-                                        variant="secondary"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          openMatch(m.id);
-                                        }}
-                                      >
-                                        Открыть
-                                      </Button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </Card>
-              </>
-            )}
-          </div>
-        )}
-
-        {screen === "match" && (
-          <div className="stack">
-            {!match ? (
-              <Card>
-                <div className="cardTitle">Загрузка…</div>
-                <div className="cardHint">Если матч не открывается — возможно, он удалён.</div>
-              </Card>
-            ) : (
-              <>
-                <Card>
-                  <div className="cardTitle">
-                    {match.team1?.name || "TBD"} vs {match.team2?.name || "TBD"}
-                  </div>
-                  <div className="cardHint">
-                    <Pill tone={statusTone(match.status)}>{prettyStatus(match.status)}</Pill>
-                    <span className="dot" />
-                    <span className="muted">
-                      раунд: {match.round} • матч: {match.position}
-                    </span>
-                    {match.winner ? (
-                      <>
-                        <span className="dot" />
-                        <span className="muted">
-                          победитель: <b>{match.winner.name}</b>
-                        </span>
-                      </>
-                    ) : null}
-                  </div>
-                </Card>
-
-                <Card>
-                  <div className="cardTitle">Репорты</div>
-                  <div className="cardHint">Если репорты разные — матч уходит в спор.</div>
-
-                  <div className="list" style={{ marginTop: 10 }}>
-                    {(match.reports || []).length === 0 ? (
-                      <div className="muted">Пока никто не отправил результат.</div>
-                    ) : (
-                      match.reports
-                        .slice()
-                        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-                        .map((r) => {
-                          const reporterName =
-                            r.reporter_team_id === match.team1?.id
-                              ? match.team1?.name
-                              : r.reporter_team_id === match.team2?.id
-                              ? match.team2?.name
-                              : `team#${r.reporter_team_id}`;
-
-                          return (
-                            <div key={r.id} className="listItem">
-                              <div className="row" style={{ justifyContent: "space-between" }}>
-                                <span>
-                                  <b>{reporterName}</b>
-                                  <span className="muted"> отправил</span>
-                                </span>
-                                <Pill tone="neutral">
-                                  {r.score_team1}:{r.score_team2}
-                                </Pill>
-                              </div>
-                              {r.proof_url ? (
-                                <div
-                                  className="muted"
-                                  style={{ marginTop: 6, fontSize: 12, wordBreak: "break-word" }}
-                                >
-                                  proof: {r.proof_url}
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })
-                    )}
-                  </div>
-                </Card>
-
-                {isAdmin && match.status === "disputed" ? (
-                  <Card>
-                    <div className="cardTitle">Resolve спора</div>
-                    <div className="cardHint">Админ может вручную выбрать победителя.</div>
-
-                    <div className="row" style={{ marginTop: 10 }}>
-                      {match.team1 ? (
-                        <Button
-                          variant="primary"
-                          onClick={() => doResolveMatch(match.team1.id)}
-                          disabled={loading}
-                        >
-                          Победитель: {match.team1.name}
-                        </Button>
-                      ) : null}
-
-                      {match.team2 ? (
-                        <Button
-                          variant="secondary"
-                          onClick={() => doResolveMatch(match.team2.id)}
-                          disabled={loading}
-                        >
-                          Победитель: {match.team2.name}
-                        </Button>
-                      ) : null}
-                    </div>
-                  </Card>
-                ) : null}
-
-                {token ? (
-                  <Card>
-                    <div className="cardTitle">Ввести результат</div>
-                    {!myTeam ? (
-                      <div className="cardHint">Сначала создай команду.</div>
-                    ) : match.winner ? (
-                      <div className="cardHint">Матч уже завершён.</div>
-                    ) : !(match.team1 && match.team2) ? (
-                      <div className="cardHint">Матч ещё не готов.</div>
-                    ) : !(myTeam.id === match.team1?.id || myTeam.id === match.team2?.id) ? (
-                      <div className="cardHint">Вы не участвуете в этом матче.</div>
-                    ) : (
-                      <form className="form" onSubmit={doReportMatch}>
-                        <label className="label">
-                          {match.team1?.name} (team1)
-                          <input
-                            className="input"
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={score1}
-                            onChange={(e) => setScore1(e.target.value)}
-                          />
-                        </label>
-                        <label className="label">
-                          {match.team2?.name} (team2)
-                          <input
-                            className="input"
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={score2}
-                            onChange={(e) => setScore2(e.target.value)}
-                          />
-                        </label>
-                        <label className="label">
-                          proof_url (опционально)
-                          <input
-                            className="input"
-                            placeholder="Ссылка на скрин/матч"
-                            value={proofUrl}
-                            onChange={(e) => setProofUrl(e.target.value)}
-                          />
-                        </label>
-                        <Button full type="submit" disabled={loading}>
-                          Отправить
-                        </Button>
-                        {matchMsg ? <div className="msg">{matchMsg}</div> : null}
-                      </form>
-                    )}
-                  </Card>
-                ) : (
-                  <Card>
-                    <div className="cardTitle">Войти</div>
-                    <div className="cardHint">Нужно авторизоваться, чтобы отправить результат.</div>
-                    {tg?.initData ? (
-                      <div style={{ marginTop: 10 }}>
-                        <Button variant="primary" onClick={telegramAutoLogin} disabled={loading}>
-                          Войти через Telegram
-                        </Button>
                       </div>
-                    ) : null}
-                  </Card>
-                )}
-              </>
-            )}
-          </div>
+                      <div className="row">
+                        {isAdmin ? <Button variant="secondary" onClick={() => doDeleteTournament(t.id)}>Удалить</Button> : null}
+                        <Button onClick={() => openTournament(t.id)}>Открыть</Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {!tournaments.length ? <div className="muted">Пока нет турниров.</div> : null}
+              </div>
+            </Card>
+          </>
         )}
 
-        {screen === "create" && (
-          <div className="stack">
-            {!isAdmin ? (
-              <Card>
-                <div className="cardTitle">Доступ ограничен</div>
-                <div className="cardHint">Создавать турниры может только администратор.</div>
-              </Card>
-            ) : (
-              <Card>
-                <div className="cardTitle">Админка: создать турнир</div>
-                <div className="cardHint">Турнир появится в списке сразу после создания.</div>
+        {screen === "tournament" && bracket && (
+          <>
+            <Card>
+              <div className="row between top">
+                <div>
+                  <div className="cardTitle">Инфо</div>
+                  <div className="cardHint">
+                    <Pill tone={statusTone(bracket.tournament.status)}>{prettyStatus(bracket.tournament.status)}</Pill>
+                    <span className="dot" />
+                    <Pill tone="blue">{bracketLabel(bracket.tournament.bracket_type)}</Pill>
+                    <span className="dot" />
+                    <span className="muted">участников: {bracket.participants?.length || 0}</span>
+                    {myTeam ? <><span className="dot" /><span className="muted">ваша команда: {myTeam.name}</span></> : null}
+                  </div>
+                </div>
+                <div className="stack actionsCol">
+                  {token && myTeam && !myTeamInTournament && ["open","registration","draft"].includes(bracket.tournament.status) ? <Button onClick={doJoinTournament}>Войти</Button> : null}
+                  {token && myTeam && myTeamInTournament && ["open","registration","draft"].includes(bracket.tournament.status) ? <Button variant="secondary" onClick={doCheckIn}>{myTeamInTournament.checked_in ? "Uncheck" : "Check-in"}</Button> : null}
+                  {isAdmin && ["open","registration","draft"].includes(bracket.tournament.status) ? <Button variant="secondary" onClick={doStartTournament}>Старт</Button> : null}
+                  {isAdmin ? <Button variant="secondary" onClick={() => doDeleteTournament(bracket.tournament.id, true)}>Удалить</Button> : null}
+                </div>
+              </div>
+            </Card>
+            {bracket.tournament.rules_text ? <Card><div className="cardTitle">Правила / регламент</div><div className="prewrap" style={{ marginTop: 8 }}>{bracket.tournament.rules_text}</div></Card> : null}
+            <Card>
+              <div className="cardTitle">Участники</div>
+              <div className="stack" style={{ marginTop: 10 }}>
+                {(bracket.participants || []).map((p) => <div className="listItem" key={p.id}><b>{p.team?.name}</b> <span className="dot" /> <Pill tone={p.checked_in ? "green" : "neutral"}>{p.checked_in ? "checked-in" : "not checked-in"}</Pill></div>)}
+                {!(bracket.participants || []).length ? <div className="muted">Пока никого нет.</div> : null}
+              </div>
+            </Card>
+            <Card>
+              <div className="row between"><div><div className="cardTitle">Сетка</div><div className="cardHint">Upper / lower / grand final.</div></div>{myTeam ? <Button variant="secondary" onClick={() => { const mine = Object.values(bracket.rounds || {}).flat().find((m) => [m.team1?.id, m.team2?.id].includes(myTeam.id) && !m.winner); if (mine) openMatch(mine.id); else setToast("Ваших матчей пока нет"); }}>Мой матч</Button> : null}</div>
+              <div style={{ marginTop: 10 }}><BracketVisual bracket={bracket} myTeamId={myTeamId} onOpenMatch={openMatch} /></div>
+            </Card>
+          </>
+        )}
 
-                <form className="form" onSubmit={doCreateTournament}>
-                  <label className="label">
-                    Название
-                    <input
-                      className="input"
-                      placeholder="Например: Dota 2 5v5 Cup"
-                      value={tTitle}
-                      onChange={(e) => setTTitle(e.target.value)}
-                      required
-                    />
-                  </label>
-
-                  <label className="label">
-                    Формат
-                    <select className="input" value={tFormat} onChange={(e) => setTFormat(e.target.value)}>
-                      <option value="1v1">1v1</option>
-                      <option value="5v5">5v5</option>
-                    </select>
-                  </label>
-
-                  <label className="label">
-                    Макс. команд (опционально)
-                    <input
-                      className="input"
-                      type="number"
-                      min="2"
-                      max="1024"
-                      value={tMaxTeams}
-                      onChange={(e) => setTMaxTeams(e.target.value)}
-                    />
-                  </label>
-
-                  <label className="label">
-                    Старт (опционально)
-                    <input
-                      className="input"
-                      type="datetime-local"
-                      value={tStartAt}
-                      onChange={(e) => setTStartAt(e.target.value)}
-                    />
-                  </label>
-
-                  <Button full type="submit" disabled={loading}>
-                    Создать турнир
-                  </Button>
+        {screen === "match" && match && (
+          <>
+            <Card>
+              <div className="cardTitle">{match.team1?.name || "TBD"} vs {match.team2?.name || "TBD"}</div>
+              <div className="cardHint"><Pill tone={statusTone(match.status)}>{prettyStatus(match.status)}</Pill><span className="dot" /><Pill tone="blue">{groupLabel(match.bracket_group)}</Pill><span className="dot" />раунд: {match.round}</div>
+            </Card>
+            <Card>
+              <div className="cardTitle">Репорты</div>
+              <div className="stack" style={{ marginTop: 10 }}>
+                {(match.reports || []).map((r) => <div className="listItem" key={r.id}><b>{r.reporter_team_id === match.team1?.id ? match.team1?.name : match.team2?.name}</b> <span className="dot" /> {r.score_team1}:{r.score_team2}</div>)}
+                {!(match.reports || []).length ? <div className="muted">Пока никто не отправил результат.</div> : null}
+              </div>
+            </Card>
+            {isAdmin ? <Card><div className="cardTitle">Админ-действия</div><div className="row" style={{ marginTop: 10 }}>{match.team1 ? <Button onClick={() => doResolveMatch(match.team1.id)}>Победитель: {match.team1.name}</Button> : null}{match.team2 ? <Button variant="secondary" onClick={() => doResolveMatch(match.team2.id)}>Победитель: {match.team2.name}</Button> : null}<Button variant="secondary" onClick={doDeleteMatch}>Удалить матч</Button></div></Card> : null}
+            {token ? <Card>
+              <div className="cardTitle">Ввести результат</div>
+              {match.winner ? <div className="cardHint">Матч уже завершён.</div> : !myTeam ? <div className="cardHint">Сначала создай или найди команду.</div> : ![match.team1?.id, match.team2?.id].includes(myTeam.id) ? <div className="cardHint">Вы не участник этого матча.</div> : (
+                <form className="form" onSubmit={doReportMatch}>
+                  <label className="label">{match.team1?.name || "team1"}<input className="input" type="number" value={score1} onChange={(e) => setScore1(e.target.value)} /></label>
+                  <label className="label">{match.team2?.name || "team2"}<input className="input" type="number" value={score2} onChange={(e) => setScore2(e.target.value)} /></label>
+                  <label className="label">proof_url<input className="input" value={proofUrl} onChange={(e) => setProofUrl(e.target.value)} /></label>
+                  <Button type="submit">Отправить</Button>
                 </form>
-              </Card>
-            )}
-          </div>
+              )}
+            </Card> : null}
+          </>
         )}
 
         {screen === "team" && (
-          <div className="stack">
-            {!token ? (
-              <Card>
-                <div className="cardTitle">Нужно войти</div>
-                <div className="cardHint">Авторизуйся, чтобы создать команду.</div>
-                {tg?.initData ? (
-                  <div style={{ marginTop: 10 }}>
-                    <Button variant="primary" onClick={telegramAutoLogin} disabled={loading}>
-                      Войти через Telegram
-                    </Button>
-                  </div>
-                ) : null}
-              </Card>
-            ) : myTeam ? (
+          <>
+            {!token ? <Card><div className="cardTitle">Нужно войти</div><div className="cardHint">Авторизуйся, чтобы создать команду.</div></Card> : myTeam ? (
               <>
                 <Card>
                   <div className="cardTitle">{myTeam.name}</div>
-                  <div className="cardHint">
-                    <Pill tone="green">капитан</Pill>
-                    <span className="dot" />
-                    <span className="muted">team_id: {myTeam.id}</span>
-                  </div>
+                  <div className="cardHint"><Pill tone="green">роль: {myTeam.my_role || "player"}</Pill><span className="dot" /><span className="muted">invite code: <b>{myTeam.invite_code}</b></span></div>
+                  <div className="row" style={{ marginTop: 10 }}><Button variant="secondary" onClick={doLeaveTeam}>Выйти</Button></div>
                 </Card>
-
                 <Card>
-                  <div className="cardTitle">Быстрые действия</div>
-                  <div className="cardHint">Перейти к следующему матчу или в список турниров.</div>
-                  <div className="row" style={{ marginTop: 10 }}>
-                    <Button variant="primary" onClick={() => setScreen("tournaments")}>
-                      Турниры
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      disabled={!nextMatch}
-                      onClick={() => {
-                        if (!nextMatch) return;
-                        openTournament(nextMatch.tournament_id).then(() => openMatch(nextMatch.id));
-                      }}
-                    >
-                      След. матч
-                    </Button>
+                  <div className="cardTitle">Состав / roster management</div>
+                  <div className="stack" style={{ marginTop: 10 }}>
+                    {(myTeam.members || []).map((m) => (
+                      <div className="listItem row between" key={m.id}>
+                        <div>
+                          <b>{m.display_name || m.username || `user#${m.user_id}`}</b>
+                          <div className="muted">{m.username ? `@${m.username}` : `id ${m.user_id}`} • {m.role}</div>
+                        </div>
+                        {myTeam.my_role === "captain" && m.user_id !== me?.id ? (
+                          <div className="row">
+                            <Button variant="secondary" onClick={() => promoteMember(m.user_id)}>Сделать капитаном</Button>
+                            <Button variant="secondary" onClick={() => kickMember(m.user_id)}>Кик</Button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
                   </div>
                 </Card>
               </>
             ) : (
-              <Card>
-                <div className="cardTitle">Создать команду</div>
-                <div className="cardHint">Для участия в турнирах нужна команда.</div>
-
-                <form className="form" onSubmit={doCreateTeam}>
-                  <label className="label">
-                    Название команды
-                    <input
-                      className="input"
-                      placeholder="Например: Radiant Kings"
-                      value={teamName}
-                      onChange={(e) => setTeamName(e.target.value)}
-                      required
-                    />
-                  </label>
-                  <Button full type="submit" disabled={loading}>
-                    Создать
-                  </Button>
-                  {teamMsg ? <div className="msg">{teamMsg}</div> : null}
-                </form>
-              </Card>
+              <>
+                <Card>
+                  <div className="cardTitle">Создать команду</div>
+                  <form className="form" onSubmit={doCreateTeam}>
+                    <label className="label">Название команды<input className="input" value={teamName} onChange={(e) => setTeamName(e.target.value)} required /></label>
+                    <Button type="submit">Создать</Button>
+                  </form>
+                </Card>
+                <Card>
+                  <div className="cardTitle">Вступить по invite code</div>
+                  <form className="form" onSubmit={doJoinByCode}>
+                    <label className="label">Код команды<input className="input" value={joinCode} onChange={(e) => setJoinCode(e.target.value)} placeholder="AB12CD34" /></label>
+                    <Button type="submit" variant="secondary">Вступить</Button>
+                  </form>
+                </Card>
+              </>
             )}
-          </div>
+          </>
         )}
 
-        {screen === "me" && (
-          <div className="stack">
+        {screen === "profile" && (
+          <>
             <Card>
-              <div className="row">
+              <div className="row between top">
                 <div>
-                  <div className="cardTitle">Профиль</div>
-                  <div className="cardHint">
-                    {token ? (
-                      <>
-                        <Pill tone="green">выполнен вход</Pill>
-                        <span className="dot" />
-                        <span className="muted">{me?.username || "user"}</span>
-                        <span className="dot" />
-                        <span className="muted">
-                          is_admin: <b>{me?.is_admin ? "true" : "false"}</b>
-                        </span>
-                        <div className="cardHint" style={{ marginTop: 8 }}>
-                          <span className="muted">
-                            TG id: <b>{tg?.initDataUnsafe?.user?.id ?? "нет"}</b> • initData:{" "}
-                            <b>{tg?.initData ? tg.initData.length : 0}</b>
-                          </span>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <Pill tone="orange">не авторизован</Pill>
-                        <span className="dot" />
-                        <span className="muted">открой Mini App в Telegram или войди вручную</span>
-                      </>
-                    )}
-                  </div>
+                  <div className="cardTitle">Профиль игрока</div>
+                  <div className="cardHint">{token ? <><Pill tone="green">вход выполнен</Pill><span className="dot" /><span className="muted">{me?.username}</span></> : <><Pill tone="orange">не авторизован</Pill></>}</div>
                 </div>
                 {token ? <Button variant="secondary" onClick={logout}>Выйти</Button> : null}
               </div>
-
-              {!token && tg?.initData ? (
-                <div style={{ marginTop: 12 }}>
-                  <Button variant="primary" onClick={telegramAutoLogin} disabled={loading}>
-                    Войти через Telegram
-                  </Button>
-                </div>
-              ) : null}
-
-              {!token && (
+              {!token ? (
                 <>
-                  {!tg?.initData ? (
-                    <div className="card" style={{ marginTop: 12 }}>
-                      <div className="cardTitle">Быстрый вход для локальной проверки</div>
-                      <div className="cardHint">Работает только если на backend включён DEV_AUTH_ENABLED=true.</div>
-                      <div className="form" style={{ marginTop: 10 }}>
-                        <label className="label">
-                          Имя тестового пользователя
-                          <input
-                            className="input"
-                            value={devLoginName}
-                            onChange={(e) => setDevLoginName(e.target.value)}
-                            placeholder="testuser"
-                          />
-                        </label>
-                        <div className="row">
-                          <Button
-                            variant="primary"
-                            onClick={() => doDevLogin(devLoginName || "testuser", false)}
-                            disabled={loading}
-                          >
-                            Войти как тестовый пользователь
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            onClick={() => doDevLogin("testadmin", true)}
-                            disabled={loading}
-                          >
-                            Войти как тестовый админ
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                  {authMsg ? <div className="msg">{authMsg}</div> : null}
+                  {!tg?.initData ? <div className="form" style={{ marginTop: 12 }}>
+                    <label className="label">Имя тестового пользователя<input className="input" value={devLoginName} onChange={(e) => setDevLoginName(e.target.value)} /></label>
+                    <div className="row"><Button onClick={() => doDevLogin(devLoginName, false)}>Войти как тестовый пользователь</Button><Button variant="secondary" onClick={() => doDevLogin("testadmin", true)}>Войти как тестовый админ</Button></div>
+                  </div> : <Button style={{ marginTop: 12 }} onClick={telegramAutoLogin}>Войти через Telegram</Button>}
                   <div className="twoCol" style={{ marginTop: 12 }}>
-                    <form className="form" onSubmit={doRegister}>
-                      <div className="cardTitle" style={{ marginBottom: 2 }}>
-                        Регистрация (dev)
-                      </div>
-                      <label className="label">
-                        Логин
-                        <input className="input" value={regUsername} onChange={(e) => setRegUsername(e.target.value)} />
-                      </label>
-                      <label className="label">
-                        Пароль
-                        <input
-                          className="input"
-                          type="password"
-                          value={regPassword}
-                          onChange={(e) => setRegPassword(e.target.value)}
-                        />
-                      </label>
-                      <Button full type="submit" disabled={loading || !API_BASE}>
-                        Зарегистрироваться
-                      </Button>
-                    </form>
-
-                    <form className="form" onSubmit={doLogin}>
-                      <div className="cardTitle" style={{ marginBottom: 2 }}>
-                        Вход (dev)
-                      </div>
-                      <label className="label">
-                        Логин
-                        <input className="input" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} />
-                      </label>
-                      <label className="label">
-                        Пароль
-                        <input
-                          className="input"
-                          type="password"
-                          value={loginPassword}
-                          onChange={(e) => setLoginPassword(e.target.value)}
-                        />
-                      </label>
-                      <Button full type="submit" variant="secondary" disabled={loading || !API_BASE}>
-                        Войти
-                      </Button>
-                    </form>
+                    <form className="form" onSubmit={doRegister}><div className="cardTitle">Регистрация</div><label className="label">Логин<input className="input" value={regUsername} onChange={(e) => setRegUsername(e.target.value)} /></label><label className="label">Пароль<input className="input" type="password" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} /></label><Button type="submit">Зарегистрироваться</Button></form>
+                    <form className="form" onSubmit={doLogin}><div className="cardTitle">Вход</div><label className="label">Логин<input className="input" value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} /></label><label className="label">Пароль<input className="input" type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} /></label><Button type="submit" variant="secondary">Войти</Button></form>
                   </div>
                 </>
+              ) : (
+                <form className="form" onSubmit={saveProfile} style={{ marginTop: 12 }}>
+                  <label className="label">Ник / display name<input className="input" value={profileDisplayName} onChange={(e) => setProfileDisplayName(e.target.value)} /></label>
+                  <label className="label">Роль<input className="input" value={profileRole} onChange={(e) => setProfileRole(e.target.value)} placeholder="carry / mid / offlane / support" /></label>
+                  <label className="label">О себе<textarea className="input textarea" value={profileBio} onChange={(e) => setProfileBio(e.target.value)} /></label>
+                  <Button type="submit">Сохранить профиль</Button>
+                </form>
               )}
             </Card>
+            {token ? <Card><div className="cardTitle">История матчей</div><div className="stack" style={{ marginTop: 10 }}>{history.map((h) => <div className="listItem" key={h.id}><b>{h.tournament_title}</b><div className="muted">{h.team1_name} vs {h.team2_name} • winner: {h.winner_name || "-"} • {groupLabel(h.bracket_group)}</div></div>)}{!history.length ? <div className="muted">Пока пусто.</div> : null}</div></Card> : null}
+          </>
+        )}
 
-            <Card>
-              <div className="cardTitle">Памятка</div>
-              <div className="cardHint">
-                Для MVP:
-                <span className="dot" />
-                Турниры создаёт только админ
-                <span className="dot" />
-                Команды создают пользователи
-                <span className="dot" />
-                Сетка single-elimination
-                <span className="dot" />
-                Спорные матчи решает админ
-              </div>
-            </Card>
-          </div>
+        {screen === "admin" && (
+          !isAdmin ? <Card><div className="cardTitle">Доступ ограничен</div><div className="cardHint">Только для админа.</div></Card> : (
+            <>
+              <Card>
+                <div className="cardTitle">Нормальная админ-панель</div>
+                <div className="gridStats" style={{ marginTop: 10 }}>
+                  <div className="stat"><div className="statNum">{adminOverview?.tournaments_count || 0}</div><div className="muted">турниров</div></div>
+                  <div className="stat"><div className="statNum">{adminOverview?.running_tournaments || 0}</div><div className="muted">running</div></div>
+                  <div className="stat"><div className="statNum">{adminOverview?.users_count || 0}</div><div className="muted">игроков</div></div>
+                  <div className="stat"><div className="statNum">{adminOverview?.teams_count || 0}</div><div className="muted">команд</div></div>
+                  <div className="stat"><div className="statNum">{adminOverview?.matches_count || 0}</div><div className="muted">матчей</div></div>
+                </div>
+              </Card>
+              <Card>
+                <div className="cardTitle">Создать турнир</div>
+                <form className="form" onSubmit={doCreateTournament}>
+                  <label className="label">Название<input className="input" value={tTitle} onChange={(e) => setTTitle(e.target.value)} required /></label>
+                  <label className="label">Формат<select className="input" value={tFormat} onChange={(e) => setTFormat(e.target.value)}><option value="1v1">1v1</option><option value="5v5">5v5</option></select></label>
+                  <label className="label">Сетка<select className="input" value={tBracketType} onChange={(e) => setTBracketType(e.target.value)}><option value="single">single elimination</option><option value="double">double elimination (beta, 4 teams)</option></select></label>
+                  <label className="label">Макс. команд<input className="input" type="number" min="2" max="1024" value={tMaxTeams} onChange={(e) => setTMaxTeams(e.target.value)} /></label>
+                  <label className="label">Старт<input className="input" type="datetime-local" value={tStartAt} onChange={(e) => setTStartAt(e.target.value)} /></label>
+                  <label className="label">Правила / регламент<textarea className="input textarea" value={tRulesText} onChange={(e) => setTRulesText(e.target.value)} placeholder="Формат матчей, check-in, дедлайны, споры, штрафы..." /></label>
+                  <Button type="submit">Создать турнир</Button>
+                </form>
+              </Card>
+              <Card>
+                <div className="cardTitle">Последние турниры</div>
+                <div className="stack" style={{ marginTop: 10 }}>{(adminOverview?.recent_tournaments || []).map((t) => <div className="listItem row between" key={t.id}><div><b>{t.title}</b><div className="muted">{bracketLabel(t.bracket_type)} • {prettyStatus(t.status)}</div></div><div className="row"><Button variant="secondary" onClick={() => doDeleteTournament(t.id)}>Удалить</Button><Button onClick={() => openTournament(t.id)}>Открыть</Button></div></div>)}</div>
+              </Card>
+            </>
+          )
         )}
       </main>
 
-      <nav className="tabs tabs--bottom">
-        <button className={cx("tab", bottomTab === "tournaments" && "tab--active")} onClick={() => goTournaments()}>
-          Турниры
-        </button>
-        <button className={cx("tab", bottomTab === "team" && "tab--active")} onClick={() => setScreen("team")}>
-          Команда
-        </button>
-        <button className={cx("tab", bottomTab === "me" && "tab--active")} onClick={() => setScreen("me")}>
-          Профиль
-        </button>
+      <nav className="tabs">
+        <button className={cx("tab", bottomTab === "tournaments" && "tab--active")} onClick={() => setScreen("tournaments")}>Турниры</button>
+        <button className={cx("tab", bottomTab === "team" && "tab--active")} onClick={() => setScreen("team")}>Команда</button>
+        <button className={cx("tab", bottomTab === "profile" && "tab--active")} onClick={() => setScreen("profile")}>Профиль</button>
+        {isAdmin ? <button className={cx("tab", bottomTab === "admin" && "tab--active")} onClick={() => { refreshAdminOverview(); setScreen("admin"); }}>Админка</button> : null}
       </nav>
 
       <style>{css}</style>
@@ -1391,238 +571,51 @@ export default function App() {
 }
 
 const css = `
-:root { color-scheme: light dark; }
-
-.app{
-  min-height: 100vh;
-  background: var(--bg);
-  color: var(--text);
-  padding: 14px 14px 86px;
-  box-sizing: border-box;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
-}
-
-.warn{
-  margin: 10px 0 14px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: rgba(255,159,67,.10);
-  color: var(--text);
-  font-size: 13px;
-}
-
-.msg{
-  margin-top: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,.06);
-  font-size: 13px;
-  white-space: pre-wrap;
-}
-
-.header{
-  display:flex;
-  justify-content:space-between;
-  align-items:flex-start;
-  gap:12px;
-  margin-bottom: 12px;
-}
-
-.headerLeft{
-  display:flex;
-  align-items:flex-start;
-  gap:10px;
-}
-
-.backBtn{
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-  background: rgba(255,255,255,.06);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.title{ font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
-.subtitle{ font-size: 13px; color: var(--hint); margin-top: 4px; }
-
-.tabs{
-  display:flex;
-  gap:8px;
-  background: rgba(255,255,255,.04);
-  border: 1px solid var(--border);
-  padding: 6px;
-  border-radius: 14px;
-}
-
-.tabs--bottom{
-  position: fixed;
-  left: 14px;
-  right: 14px;
-  bottom: 14px;
-  z-index: 20;
-}
-
-.tab{
-  flex: 1;
-  background: transparent;
-  border: 0;
-  color: var(--hint);
-  padding: 10px 10px;
-  border-radius: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.tab--active{ background: rgba(255,255,255,.08); color: var(--text); }
-
-.stack{ display:flex; flex-direction:column; gap:12px; }
-
-.card{
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 14px;
-  box-shadow: 0 6px 18px rgba(0,0,0,.12);
-}
-
-.row{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.row--top{ align-items:flex-start; }
-.grow{ flex: 1; }
-
-.cardTitle{ font-size: 15px; font-weight: 800; margin-bottom: 6px; }
-
-.cardHint{
-  font-size: 13px;
-  color: var(--hint);
-  display:flex;
-  align-items:center;
-  gap:8px;
-  flex-wrap: wrap;
-}
-
-.muted{ color: var(--hint); }
-
-.dot{
-  width: 4px;
-  height: 4px;
-  background: var(--border);
-  border-radius: 999px;
-  display:inline-block;
-}
-
-.pill{
-  font-size: 12px;
-  font-weight: 800;
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgba(255,255,255,.06);
-}
-
-.pill--green{ background: rgba(46, 204, 113, .18); }
-.pill--orange{ background: rgba(255, 159, 67, .18); }
-.pill--blue{ background: rgba(52, 152, 219, .18); }
-.pill--purple{ background: rgba(155, 89, 182, .18); }
-
-.btn{
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-weight: 900;
-  cursor: pointer;
-}
-
-.btn:disabled{
-  opacity: .6;
-  cursor: not-allowed;
-}
-
-.btn--primary{
-  background: var(--btn);
-  color: var(--btnText);
-  border-color: rgba(0,0,0,.08);
-}
-
-.btn--secondary{
-  background: rgba(255,255,255,.06);
-  color: var(--text);
-}
-
-.btn--full{ width: 100%; }
-
-.form{
-  margin-top: 12px;
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-}
-
-.twoCol{
-  margin-top: 12px;
-  display:grid;
-  grid-template-columns: 1fr;
-  gap:12px;
-  align-items:start;
-}
-
-@media (min-width: 520px){
-  .twoCol{ grid-template-columns: 1fr 1fr; }
-}
-
-.label{
-  display:flex;
-  flex-direction:column;
-  gap:6px;
-  font-size: 12px;
-  color: var(--hint);
-  font-weight: 800;
-}
-
-.input{
-  background: rgba(255,255,255,.06);
-  border: 1px solid var(--border);
-  color: var(--text);
-  padding: 11px 12px;
-  border-radius: 12px;
-  outline: none;
-}
-
-.input::placeholder{ color: rgba(255,255,255,.35); }
-
-.listItem{
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: rgba(0,0,0,.08);
-  margin-top: 8px;
-}
-
-.roundTitle{
-  font-weight: 900;
-  font-size: 14px;
-  letter-spacing: -0.01em;
-}
-
-.matchCard{
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 12px;
-  background: rgba(0,0,0,.10);
-  cursor: pointer;
-}
-
-.matchCard--mine{
-  border-color: rgba(46, 204, 113, .55);
-  box-shadow: 0 0 0 2px rgba(46, 204, 113, .12) inset;
-}
-
-.matchTitle{
-  font-weight: 900;
-  font-size: 14px;
-}
+:root { color-scheme: dark; }
+body { margin: 0; }
+.app{ min-height:100vh; background:var(--bg); color:var(--text); padding:14px 14px 90px; box-sizing:border-box; font-family: ui-sans-serif, system-ui, Arial; }
+.header{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:14px; }
+.title{ font-size:28px; font-weight:900; }
+.subtitle,.muted,.cardHint{ color:var(--muted); }
+.stack{ display:grid; gap:14px; }
+.card{ background:linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.04)); border:1px solid rgba(255,255,255,.08); border-radius:18px; padding:16px; box-shadow:0 8px 30px rgba(0,0,0,.18); }
+.cardTitle,.sectionTitle{ font-size:18px; font-weight:800; }
+.row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.between{ justify-content:space-between; }
+.top{ align-items:flex-start; }
+.actionsCol{ width:150px; }
+.form{ display:grid; gap:12px; }
+.label{ display:grid; gap:6px; font-size:14px; color:var(--muted); }
+.input{ width:100%; box-sizing:border-box; border:1px solid rgba(255,255,255,.10); border-radius:14px; background:rgba(255,255,255,.06); color:var(--text); padding:12px 14px; outline:none; }
+.textarea{ min-height:110px; resize:vertical; }
+.btn{ border:0; border-radius:14px; padding:12px 16px; font-weight:800; cursor:pointer; }
+.btn--primary{ background:var(--primary); color:var(--primaryText); }
+.btn--secondary{ background:rgba(255,255,255,.08); color:var(--text); }
+.btn:disabled{ opacity:.6; cursor:not-allowed; }
+.msg{ background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:12px 14px; }
+.pill{ display:inline-flex; align-items:center; border-radius:999px; padding:4px 10px; font-size:12px; font-weight:800; border:1px solid rgba(255,255,255,.1); }
+.pill--green{ background:rgba(52,199,89,.18); color:#a9ffbe; }
+.pill--orange{ background:rgba(255,159,10,.18); color:#ffd49a; }
+.pill--blue{ background:rgba(93,147,255,.18); color:#bdd2ff; }
+.pill--purple{ background:rgba(174,102,255,.18); color:#dfc4ff; }
+.pill--neutral{ background:rgba(255,255,255,.08); color:#fff; }
+.dot{ display:inline-block; width:4px; height:4px; border-radius:50%; background:rgba(255,255,255,.25); margin:0 8px; }
+.listItem{ border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.04); border-radius:14px; padding:12px 14px; }
+.bracketScroller{ overflow:auto; }
+.bracketCols{ display:flex; gap:14px; min-width:max-content; }
+.bracketCol{ width:220px; display:grid; gap:10px; }
+.bracketColTitle{ font-size:14px; font-weight:800; color:var(--muted); margin-bottom:2px; }
+.bracketMatch{ text-align:left; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); color:var(--text); border-radius:14px; padding:10px; display:grid; gap:6px; }
+.bracketMatch--mine{ box-shadow:0 0 0 1px rgba(46,166,255,.7) inset; }
+.bracketDivider{ height:1px; background:rgba(255,255,255,.08); }
+.bracketMeta{ display:flex; justify-content:space-between; gap:8px; font-size:12px; color:var(--muted); }
+.twoCol{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+.gridStats{ display:grid; grid-template-columns:repeat(5,1fr); gap:10px; }
+.stat{ padding:12px; border-radius:14px; background:rgba(255,255,255,.04); border:1px solid rgba(255,255,255,.08); }
+.statNum{ font-size:24px; font-weight:900; }
+.prewrap{ white-space:pre-wrap; }
+.tabs{ position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:rgba(7,17,31,.92); backdrop-filter: blur(10px); border-top:1px solid rgba(255,255,255,.08); }
+.tab{ flex:1; border:0; border-radius:14px; padding:14px 10px; background:rgba(255,255,255,.06); color:var(--text); font-weight:900; }
+.tab--active{ background:rgba(255,255,255,.14); }
+@media (max-width: 760px){ .twoCol{ grid-template-columns:1fr; } .gridStats{ grid-template-columns:repeat(2,1fr); } .actionsCol{ width:100%; } }
 `;

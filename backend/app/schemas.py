@@ -22,13 +22,24 @@ class UserOut(BaseModel):
     id: int
     username: str
     is_admin: bool
+    display_name: str | None = None
+    bio: str | None = None
+    preferred_role: str | None = None
 
     class Config:
         from_attributes = True
 
 
 class MeOut(UserOut):
-    pass
+    telegram_id: int | None = None
+    first_name: str | None = None
+    created_at: datetime | None = None
+
+
+class ProfileUpdateIn(BaseModel):
+    display_name: str | None = Field(default=None, max_length=64)
+    bio: str | None = Field(default=None, max_length=500)
+    preferred_role: str | None = Field(default=None, max_length=32)
 
 
 class TournamentCreateIn(BaseModel):
@@ -38,6 +49,8 @@ class TournamentCreateIn(BaseModel):
     description: str | None = None
     max_teams: int | None = Field(default=None, ge=2, le=1024)
     start_at: datetime | None = None
+    bracket_type: str = Field(default="single", pattern="^(single|double)$")
+    rules_text: str | None = Field(default=None, max_length=4000)
 
 
 class TournamentOut(BaseModel):
@@ -49,6 +62,8 @@ class TournamentOut(BaseModel):
     max_teams: int | None
     start_at: datetime | None
     status: str
+    bracket_type: str = "single"
+    rules_text: str | None = None
     created_at: datetime
     created_by_id: int
 
@@ -60,11 +75,34 @@ class TeamCreateIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
 
 
+class TeamJoinByCodeIn(BaseModel):
+    invite_code: str = Field(min_length=1, max_length=64)
+
+
+class TeamMemberRoleIn(BaseModel):
+    role: str = Field(pattern="^(captain|player)$")
+
+
+class TeamMemberOut(BaseModel):
+    id: int
+    user_id: int
+    username: str | None = None
+    display_name: str | None = None
+    role: str
+    joined_at: datetime | None = None
+
+    class Config:
+        from_attributes = True
+
+
 class TeamOut(BaseModel):
     id: int
     name: str
     captain_user_id: int
+    invite_code: str | None = None
     created_at: datetime
+    members: list[TeamMemberOut] = []
+    my_role: str | None = None
 
     class Config:
         from_attributes = True
@@ -97,6 +135,7 @@ class MatchOut(BaseModel):
     status: str
     next_match_id: int | None
     next_slot: int | None
+    bracket_group: str = "WB"
     created_at: datetime
 
     class Config:
@@ -132,10 +171,33 @@ class MatchWithReportsOut(MatchOut):
     reports: list[MatchReportOut] = []
 
 
+class MatchHistoryOut(BaseModel):
+    id: int
+    tournament_id: int
+    tournament_title: str
+    team1_name: str | None = None
+    team2_name: str | None = None
+    winner_name: str | None = None
+    bracket_group: str = "WB"
+    round: int
+    position: int
+    status: str
+    created_at: datetime
+
+
 class AdminResolveMatchIn(BaseModel):
     winner_team_id: int
 
 
-class CheckInOut(BaseModel):
+class MatchActionOut(BaseModel):
     ok: bool
-    checked_in: bool
+    message: str
+
+
+class AdminOverviewOut(BaseModel):
+    tournaments_count: int
+    running_tournaments: int
+    users_count: int
+    teams_count: int
+    matches_count: int
+    recent_tournaments: list[TournamentOut]

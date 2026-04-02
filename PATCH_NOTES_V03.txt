@@ -1,0 +1,26 @@
+Версия 0.3 patch
+
+Что добавлено:
+- double elimination (MVP beta): работает для турниров ровно на 4 команды, без grand-final reset
+- профиль игрока: display name, роль, bio
+- roster management: вступление по invite code, просмотр состава, передача капитана, кик игрока
+- турнирные правила / регламент: поле rules_text в турнире + отображение на странице турнира
+- history матчей: история завершенных матчей для своей команды
+- админ-панель: overview, создание турниров с выбором сетки, быстрый список последних турниров
+
+Что заменить:
+- backend/app/models.py
+- backend/app/schemas.py
+- backend/app/team_utils.py
+- backend/app/bracket.py
+- backend/app/routes/auth.py
+- backend/app/routes/teams.py
+- backend/app/routes/tournaments.py
+- backend/app/routes/matches.py
+- backend/app/routes/admin.py
+- backend/app/main.py
+- webapp/src/App.jsx
+
+Важно:
+- Для double elimination сейчас поддержан MVP сценарий на 4 команды.
+- Для single elimination логика остается рабочей как раньше.

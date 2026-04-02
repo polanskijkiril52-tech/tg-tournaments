@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
-from ..schemas import AuthOut, RegisterIn, LoginIn, MeOut
+from ..schemas import AuthOut, RegisterIn, LoginIn, MeOut, ProfileUpdateIn
 from ..auth.jwt import create
 from ..config import settings
 from ..deps import get_db, get_current_user, get_telegram_user_id_optional
@@ -16,7 +16,6 @@ from ..models import User
 from ..telegram_init import TelegramInitDataError, verify_and_parse_init_data
 
 router = APIRouter()
-
 pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 
@@ -45,83 +44,78 @@ def me(
         "id": user.id,
         "username": user.username,
         "is_admin": bool(user.is_admin or tg_admin),
+        "display_name": user.display_name,
+        "bio": user.bio,
+        "preferred_role": user.preferred_role,
+        "telegram_id": user.telegram_id,
+        "first_name": user.first_name,
+        "created_at": user.created_at,
     }
 
 
-@router.post("/auth/register", response_model=AuthOut)
-def register(
-    data: RegisterIn,
+@router.put("/me/profile", response_model=MeOut)
+def update_profile(
+    data: ProfileUpdateIn,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     tg_id: int | None = Depends(get_telegram_user_id_optional),
 ):
-    username = data.username.strip()
+    if tg_id is not None and user.telegram_id not in {None, tg_id}:
+        raise HTTPException(status_code=403, detail="This account is bound to another Telegram user")
 
+    user.display_name = (data.display_name or "").strip() or None
+    user.bio = (data.bio or "").strip() or None
+    user.preferred_role = (data.preferred_role or "").strip() or None
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return me(user=user, tg_id=tg_id)
+
+
+@router.post("/auth/register", response_model=AuthOut)
+def register(data: RegisterIn, db: Session = Depends(get_db), tg_id: int | None = Depends(get_telegram_user_id_optional)):
+    username = data.username.strip()
     if not username or not data.password:
         raise HTTPException(status_code=400, detail="Username and password required")
-
     existing = db.query(User).filter(User.username == username).first()
     if existing:
         raise HTTPException(status_code=400, detail="Username already exists")
 
-    user = User(
-        username=username,
-        password_hash=pwd.hash(data.password),
-        telegram_id=tg_id,
-        is_admin=False,
-    )
-
+    user = User(username=username, password_hash=pwd.hash(data.password), telegram_id=tg_id, is_admin=False)
     db.add(user)
     db.commit()
     db.refresh(user)
-
     token = create(user.id, settings.JWT_SECRET, settings.ACCESS_TOKEN_EXPIRE_SECONDS)
     return {"access_token": token}
 
 
 @router.post("/auth/login", response_model=AuthOut)
-def login(
-    data: LoginIn,
-    db: Session = Depends(get_db),
-    tg_id: int | None = Depends(get_telegram_user_id_optional),
-):
+def login(data: LoginIn, db: Session = Depends(get_db), tg_id: int | None = Depends(get_telegram_user_id_optional)):
     username = data.username.strip()
-
     user = db.query(User).filter(User.username == username).first()
     if not user or not pwd.verify(data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
     if user.telegram_id is not None and tg_id is None:
         raise HTTPException(status_code=401, detail="Open the app from Telegram to login")
-
     if tg_id is not None:
         if user.telegram_id is None:
             user.telegram_id = tg_id
             db.commit()
         elif user.telegram_id != tg_id:
             raise HTTPException(status_code=403, detail="This account is bound to another Telegram user")
-
     token = create(user.id, settings.JWT_SECRET, settings.ACCESS_TOKEN_EXPIRE_SECONDS)
     return {"access_token": token}
 
 
 @router.post("/auth/dev-login", response_model=AuthOut)
-def dev_login(
-    data: DevLoginIn,
-    db: Session = Depends(get_db),
-):
+def dev_login(data: DevLoginIn, db: Session = Depends(get_db)):
     if not settings.DEV_AUTH_ENABLED:
         raise HTTPException(status_code=403, detail="Dev auth is disabled")
-
     username = data.username.strip()
     user = db.query(User).filter(User.username == username).first()
     if not user:
         random_pw = secrets.token_urlsafe(16)
-        user = User(
-            username=username,
-            password_hash=pwd.hash(random_pw),
-            telegram_id=None,
-            is_admin=bool(data.is_admin),
-        )
+        user = User(username=username, password_hash=pwd.hash(random_pw), telegram_id=None, is_admin=bool(data.is_admin))
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -130,19 +124,14 @@ def dev_login(
         db.add(user)
         db.commit()
         db.refresh(user)
-
     token = create(user.id, settings.JWT_SECRET, settings.ACCESS_TOKEN_EXPIRE_SECONDS)
     return {"access_token": token}
 
 
 @router.post("/auth/telegram", response_model=AuthOut)
-def telegram_login(
-    db: Session = Depends(get_db),
-    x_init_data: str = Header(..., alias="X-Init-Data"),
-):
+def telegram_login(db: Session = Depends(get_db), x_init_data: str = Header(..., alias="X-Init-Data")):
     if not settings.TELEGRAM_BOT_TOKEN:
         raise HTTPException(status_code=500, detail="Server misconfigured: TELEGRAM_BOT_TOKEN not set")
-
     try:
         parsed = verify_and_parse_init_data(x_init_data, settings.TELEGRAM_BOT_TOKEN)
     except TelegramInitDataError as e:
@@ -170,13 +159,13 @@ def telegram_login(
             i += 1
             suffix = f"_{i}"
             username = (base_username[: (64 - len(suffix))] + suffix)[:64]
-
         random_pw = secrets.token_urlsafe(16)
         user = User(
             username=username,
             password_hash=pwd.hash(random_pw),
             telegram_id=tg_id,
             first_name=first_name,
+            display_name=first_name,
             is_admin=False,
         )
         db.add(user)
@@ -187,8 +176,10 @@ def telegram_login(
         if first_name and user.first_name != first_name:
             user.first_name = first_name
             changed = True
+        if first_name and not user.display_name:
+            user.display_name = first_name
+            changed = True
         if changed:
             db.commit()
-
     token = create(user.id, settings.JWT_SECRET, settings.ACCESS_TOKEN_EXPIRE_SECONDS)
     return {"access_token": token}
