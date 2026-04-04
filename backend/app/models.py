@@ -21,6 +21,11 @@ class User(Base):
     display_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     bio: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     preferred_role: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    steam_account_label: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    steam_profile_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    steam_id64: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    steam_display_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    steam_avatar_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     tournaments_created: Mapped[list["Tournament"]] = relationship(

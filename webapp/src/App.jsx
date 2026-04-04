@@ -20,6 +20,29 @@ function useTelegramTheme() {
 function Pill({ children, tone = "neutral" }) {
   return <span className={cx("pill", `pill--${tone}`)}>{children}</span>;
 }
+function LinkButton({ href, children }) {
+  if (!href) return null;
+  return <a className={cx("btn", "btn--secondary")} href={href} target="_blank" rel="noreferrer">{children}</a>;
+}
+function SteamSummary({ user }) {
+  if (!user?.steam_profile_url) return <div className="muted">Можно указать Steam ID64, vanity или полную ссылку на профиль.</div>;
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        {user.steam_avatar_url ? <img src={user.steam_avatar_url} alt="Steam avatar" style={{ width: 48, height: 48, borderRadius: 999, objectFit: "cover", border: "1px solid rgba(255,255,255,.12)" }} /> : null}
+        <div>
+          <div><b>{user.steam_display_name || user.steam_account_label || "Steam profile"}</b></div>
+          <div className="muted">{user.steam_account_label || user.steam_profile_url}</div>
+        </div>
+      </div>
+      <div className="row" style={{ flexWrap: "wrap" }}>
+        <LinkButton href={user.steam_profile_url}>Открыть Steam</LinkButton>
+        <LinkButton href={user.dotabuff_url}>Dotabuff</LinkButton>
+        <LinkButton href={user.opendota_url}>OpenDota</LinkButton>
+      </div>
+    </div>
+  );
+}
 function Card({ children }) { return <div className="card">{children}</div>; }
 function Button({ children, variant = "primary", ...props }) {
   return <button className={cx("btn", `btn--${variant}`)} {...props}>{children}</button>;
@@ -132,6 +155,7 @@ export default function App() {
   const [profileDisplayName, setProfileDisplayName] = useState("");
   const [profileBio, setProfileBio] = useState("");
   const [profileRole, setProfileRole] = useState("");
+  const [profileSteam, setProfileSteam] = useState("");
 
   const [tTitle, setTTitle] = useState("");
   const [tFormat, setTFormat] = useState("5v5");
@@ -156,7 +180,7 @@ export default function App() {
   }), [theme]);
 
   useEffect(() => { if (token) bootstrap(); else { refreshTournaments(); setMe(null); setMyTeam(null); } }, [token]);
-  useEffect(() => { if (me) { setProfileDisplayName(me.display_name || ""); setProfileBio(me.bio || ""); setProfileRole(me.preferred_role || ""); } }, [me]);
+  useEffect(() => { if (me) { setProfileDisplayName(me.display_name || ""); setProfileBio(me.bio || ""); setProfileRole(me.preferred_role || ""); setProfileSteam(me.steam_profile_url || me.steam_account_label || ""); } }, [me]);
 
   async function bootstrap() {
     await Promise.allSettled([refreshMe(), refreshMyTeam(), refreshTournaments(), refreshNextMatch(), refreshHistory(), refreshAdminOverview()]);
@@ -239,7 +263,7 @@ export default function App() {
 
   async function saveProfile(e) {
     e.preventDefault(); setLoading(true); setToast("");
-    try { const data = await api("/me/profile", "PUT", { display_name: profileDisplayName, bio: profileBio, preferred_role: profileRole }, token); setMe(data); setToast("Профиль сохранён"); }
+    try { const data = await api("/me/profile", "PUT", { display_name: profileDisplayName, bio: profileBio, preferred_role: profileRole, steam_account: profileSteam }, token); setMe(data); setToast("Профиль сохранён"); }
     catch (e2) { setToast(String(e2.message || e2)); } finally { setLoading(false); }
   }
 
@@ -457,6 +481,17 @@ export default function App() {
                         <div>
                           <b>{m.display_name || m.username || `user#${m.user_id}`}</b>
                           <div className="muted">{m.username ? `@${m.username}` : `id ${m.user_id}`} • {m.role}</div>
+                          {m.steam_profile_url ? <div className="stack" style={{ gap: 8, marginTop: 8 }}>
+                            <div className="row" style={{ alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                              {m.steam_avatar_url ? <img src={m.steam_avatar_url} alt="Steam avatar" style={{ width: 32, height: 32, borderRadius: 999, objectFit: "cover", border: "1px solid rgba(255,255,255,.12)" }} /> : null}
+                              <div className="muted">{m.steam_display_name || m.steam_account_label || "Steam profile"}</div>
+                            </div>
+                            <div className="row" style={{ flexWrap: "wrap" }}>
+                              <LinkButton href={m.steam_profile_url}>Открыть Steam</LinkButton>
+                              <LinkButton href={m.dotabuff_url}>Dotabuff</LinkButton>
+                              <LinkButton href={m.opendota_url}>OpenDota</LinkButton>
+                            </div>
+                          </div> : null}
                         </div>
                         {myTeam.my_role === "captain" && m.user_id !== me?.id ? (
                           <div className="row">
@@ -515,6 +550,8 @@ export default function App() {
                 <form className="form" onSubmit={saveProfile} style={{ marginTop: 12 }}>
                   <label className="label">Ник / display name<input className="input" value={profileDisplayName} onChange={(e) => setProfileDisplayName(e.target.value)} /></label>
                   <label className="label">Роль<input className="input" value={profileRole} onChange={(e) => setProfileRole(e.target.value)} placeholder="carry / mid / offlane / support" /></label>
+                  <label className="label">Steam<input className="input" value={profileSteam} onChange={(e) => setProfileSteam(e.target.value)} placeholder="7656119... / mySteamName / https://steamcommunity.com/..." /></label>
+                  <SteamSummary user={me} />
                   <label className="label">О себе<textarea className="input textarea" value={profileBio} onChange={(e) => setProfileBio(e.target.value)} /></label>
                   <Button type="submit">Сохранить профиль</Button>
                 </form>

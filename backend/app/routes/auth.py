@@ -4,15 +4,22 @@ import json
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Header
-from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
-from ..schemas import AuthOut, RegisterIn, LoginIn, MeOut, ProfileUpdateIn
 from ..auth.jwt import create
 from ..config import settings
-from ..deps import get_db, get_current_user, get_telegram_user_id_optional
+from ..deps import get_current_user, get_db, get_telegram_user_id_optional
 from ..models import User
+from ..schemas import AuthOut, LoginIn, MeOut, ProfileUpdateIn, RegisterIn
+from ..steam_utils import (
+    SteamAccountError,
+    build_dotabuff_url,
+    build_opendota_url,
+    fetch_steam_profile_summary,
+    normalize_steam_account,
+)
 from ..telegram_init import TelegramInitDataError, verify_and_parse_init_data
 
 router = APIRouter()
@@ -22,6 +29,32 @@ pwd = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 class DevLoginIn(BaseModel):
     username: str = Field(default="testuser", min_length=2, max_length=64)
     is_admin: bool = False
+
+
+def serialize_me(user: User, tg_id: int | None = None) -> dict:
+    tg_admin = False
+    if settings.ADMIN_TELEGRAM_ID is not None:
+        admin_tg_id = int(settings.ADMIN_TELEGRAM_ID)
+        tg_admin = (tg_id == admin_tg_id) if tg_id is not None else (user.telegram_id == admin_tg_id)
+
+    return {
+        "id": user.id,
+        "username": user.username,
+        "is_admin": bool(user.is_admin or tg_admin),
+        "display_name": user.display_name,
+        "bio": user.bio,
+        "preferred_role": user.preferred_role,
+        "steam_account_label": user.steam_account_label,
+        "steam_profile_url": user.steam_profile_url,
+        "steam_id64": user.steam_id64,
+        "steam_display_name": user.steam_display_name,
+        "steam_avatar_url": user.steam_avatar_url,
+        "dotabuff_url": build_dotabuff_url(user.steam_id64),
+        "opendota_url": build_opendota_url(user.steam_id64),
+        "telegram_id": user.telegram_id,
+        "first_name": user.first_name,
+        "created_at": user.created_at,
+    }
 
 
 @router.get("/me", response_model=MeOut)
@@ -35,22 +68,7 @@ def me(
         elif user.telegram_id != tg_id:
             raise HTTPException(status_code=403, detail="This account is bound to another Telegram user")
 
-    tg_admin = False
-    if settings.ADMIN_TELEGRAM_ID is not None:
-        admin_tg_id = int(settings.ADMIN_TELEGRAM_ID)
-        tg_admin = (tg_id == admin_tg_id) if tg_id is not None else (user.telegram_id == admin_tg_id)
-
-    return {
-        "id": user.id,
-        "username": user.username,
-        "is_admin": bool(user.is_admin or tg_admin),
-        "display_name": user.display_name,
-        "bio": user.bio,
-        "preferred_role": user.preferred_role,
-        "telegram_id": user.telegram_id,
-        "first_name": user.first_name,
-        "created_at": user.created_at,
-    }
+    return serialize_me(user, tg_id=tg_id)
 
 
 @router.put("/me/profile", response_model=MeOut)
@@ -66,10 +84,31 @@ def update_profile(
     user.display_name = (data.display_name or "").strip() or None
     user.bio = (data.bio or "").strip() or None
     user.preferred_role = (data.preferred_role or "").strip() or None
+
+    steam_raw = (data.steam_account or "").strip()
+    if steam_raw:
+        try:
+            steam_profile_url, steam_account_label = normalize_steam_account(steam_raw)
+        except SteamAccountError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        summary = fetch_steam_profile_summary(steam_profile_url)
+        user.steam_profile_url = steam_profile_url
+        user.steam_account_label = steam_account_label
+        user.steam_id64 = summary.get("steam_id64") or (steam_account_label if steam_account_label and steam_account_label.isdigit() else None)
+        user.steam_display_name = summary.get("steam_display_name") or user.steam_display_name
+        user.steam_avatar_url = summary.get("steam_avatar_url") or user.steam_avatar_url
+    else:
+        user.steam_profile_url = None
+        user.steam_account_label = None
+        user.steam_id64 = None
+        user.steam_display_name = None
+        user.steam_avatar_url = None
+
     db.add(user)
     db.commit()
     db.refresh(user)
-    return me(user=user, tg_id=tg_id)
+    return serialize_me(user, tg_id=tg_id)
 
 
 @router.post("/auth/register", response_model=AuthOut)

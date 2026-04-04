@@ -1,0 +1,20 @@
+PATCH: STEAM PROFILE LINK
+
+Что добавлено:
+- в профиль игрока добавлено поле Steam
+- поддерживаются 3 формата ввода:
+  1) Steam ID64 (17 цифр)
+  2) vanity name
+  3) полная ссылка на steamcommunity.com/id/... или /profiles/...
+- backend нормализует значение и сохраняет ссылку на Steam-профиль
+- ссылка на Steam теперь доступна в /me и в составе команды
+- в составе команды рядом с игроком отображается ссылка Steam
+- startup schema fix автоматически добавляет новые колонки в users:
+  - steam_account_label
+  - steam_profile_url
+
+Пример ввода:
+- 76561198000000000
+- mySteamNick
+- https://steamcommunity.com/id/mySteamNick
+- https://steamcommunity.com/profiles/76561198000000000

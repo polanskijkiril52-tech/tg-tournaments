@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ..deps import get_current_user, get_db
 from ..models import Team, TeamMember, User
 from ..schemas import TeamCreateIn, TeamJoinByCodeIn, TeamMemberOut, TeamMemberRoleIn, TeamOut, MatchActionOut
+from ..steam_utils import build_dotabuff_url, build_opendota_url
 from ..team_utils import add_user_to_team, get_user_team_membership, list_team_members, remove_user_from_team
 
 router = APIRouter(prefix="/teams", tags=["teams"])
@@ -30,6 +31,13 @@ def _serialize_team(db: Session, team: Team, user: User | None = None) -> TeamOu
                 user_id=m.user_id,
                 username=m.user.username if m.user else None,
                 display_name=(m.user.display_name if m.user else None),
+                steam_account_label=(m.user.steam_account_label if m.user else None),
+                steam_profile_url=(m.user.steam_profile_url if m.user else None),
+                steam_id64=(m.user.steam_id64 if m.user else None),
+                steam_display_name=(m.user.steam_display_name if m.user else None),
+                steam_avatar_url=(m.user.steam_avatar_url if m.user else None),
+                dotabuff_url=(build_dotabuff_url(m.user.steam_id64) if m.user else None),
+                opendota_url=(build_opendota_url(m.user.steam_id64) if m.user else None),
                 role=m.role,
                 joined_at=m.joined_at,
             )

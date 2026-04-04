@@ -1,30 +1,30 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE = BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
-    # Security
-    JWT_SECRET: str = "dev-change-me"  # ⚠️ override in production
-    ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 24  # 24h
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-    # Database
-    DATABASE_URL: str = "sqlite:///./app.db"  # ⚠️ override with Postgres on Render
+    JWT_SECRET: str = "dev-change-me-please-change-this-secret"
+    ACCESS_TOKEN_EXPIRE_SECONDS: int = 60 * 60 * 24
 
-    # CORS
-    # Comma-separated list of allowed origins. Use "*" only for quick testing.
+    DATABASE_URL: str = "sqlite:///./app.db"
+
     ALLOWED_ORIGINS: str = "*"
 
-    # Telegram Mini App security
-    # Token of the Telegram bot that owns this Mini App (used to validate initData)
     TELEGRAM_BOT_TOKEN: str | None = None
-
-    # Strict admin (only one person): Telegram user id of the admin
     ADMIN_TELEGRAM_ID: int | None = None
 
-    # Local browser auth for development only
     DEV_AUTH_ENABLED: bool = False
-
-    class Config:
-        env_file = ".env"
 
 
 settings = Settings()

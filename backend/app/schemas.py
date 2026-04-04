@@ -25,6 +25,13 @@ class UserOut(BaseModel):
     display_name: str | None = None
     bio: str | None = None
     preferred_role: str | None = None
+    steam_account_label: str | None = None
+    steam_profile_url: str | None = None
+    steam_id64: str | None = None
+    steam_display_name: str | None = None
+    steam_avatar_url: str | None = None
+    dotabuff_url: str | None = None
+    opendota_url: str | None = None
 
     class Config:
         from_attributes = True
@@ -40,6 +47,7 @@ class ProfileUpdateIn(BaseModel):
     display_name: str | None = Field(default=None, max_length=64)
     bio: str | None = Field(default=None, max_length=500)
     preferred_role: str | None = Field(default=None, max_length=32)
+    steam_account: str | None = Field(default=None, max_length=255)
 
 
 class TournamentCreateIn(BaseModel):
@@ -88,6 +96,13 @@ class TeamMemberOut(BaseModel):
     user_id: int
     username: str | None = None
     display_name: str | None = None
+    steam_account_label: str | None = None
+    steam_profile_url: str | None = None
+    steam_id64: str | None = None
+    steam_display_name: str | None = None
+    steam_avatar_url: str | None = None
+    dotabuff_url: str | None = None
+    opendota_url: str | None = None
     role: str
     joined_at: datetime | None = None
 
